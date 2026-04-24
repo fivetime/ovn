@@ -4641,6 +4641,8 @@ struct ed_type_pflow_output {
     struct ovn_desired_flow_table flow_table;
     /* Drop debugging options. */
     struct physical_debug debug;
+    /* Shared group table from lflow_output, set during main loop init. */
+    struct ovn_extend_table *group_table;
 };
 
 static void
@@ -4722,6 +4724,7 @@ struct ed_type_evpn_arp {
 };
 
 static void init_physical_ctx(struct engine_node *node,
+                              struct ed_type_pflow_output *data,
                               struct ed_type_runtime_data *rt_data,
                               struct ed_type_non_vif_data *non_vif_data,
                               struct physical_ctx *p_ctx)
@@ -4808,6 +4811,7 @@ static void init_physical_ctx(struct engine_node *node,
     p_ctx->evpn_multicast_groups = &eb_data->multicast_groups;
     p_ctx->evpn_fdbs = &efdb_data->fdbs;
     p_ctx->evpn_arps = &earp_data->arps;
+    p_ctx->group_table = data->group_table;
 
     struct controller_engine_ctx *ctrl_ctx = engine_get_context()->client_ctx;
     p_ctx->if_mgr = ctrl_ctx->if_mgr;
@@ -4860,7 +4864,7 @@ en_pflow_output_run(struct engine_node *node, void *data)
         engine_get_input_data("non_vif_data", node);
 
     struct physical_ctx p_ctx;
-    init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
+    init_physical_ctx(node, pfo, rt_data, non_vif_data, &p_ctx);
     physical_run(&p_ctx, pflow_table);
     destroy_physical_ctx(&p_ctx);
 
@@ -4880,7 +4884,7 @@ pflow_output_if_status_mgr_handler(struct engine_node *node,
         engine_get_input_data("if_status_mgr", node);
 
     struct physical_ctx p_ctx;
-    init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
+    init_physical_ctx(node, pfo, rt_data, non_vif_data, &p_ctx);
 
     const struct ovsrec_interface *iface;
     enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
@@ -4925,7 +4929,7 @@ pflow_output_sb_port_binding_handler(struct engine_node *node,
     struct ed_type_pflow_output *pfo = data;
 
     struct physical_ctx p_ctx;
-    init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
+    init_physical_ctx(node, pfo, rt_data, non_vif_data, &p_ctx);
 
     /* We handle port-binding changes for physical flow processing
      * only. flow_output runtime data handler takes care of processing
@@ -4961,7 +4965,7 @@ pflow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
     struct ed_type_pflow_output *pfo = data;
 
     struct physical_ctx p_ctx;
-    init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
+    init_physical_ctx(node, pfo, rt_data, non_vif_data, &p_ctx);
 
     physical_handle_mc_group_changes(&p_ctx, &pfo->flow_table);
 
@@ -4991,7 +4995,7 @@ pflow_output_runtime_data_handler(struct engine_node *node, void *data)
     struct ed_type_pflow_output *pfo = data;
 
     struct physical_ctx p_ctx;
-    init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
+    init_physical_ctx(node, pfo, rt_data, non_vif_data, &p_ctx);
 
     struct tracked_datapath *tdp;
     HMAP_FOR_EACH (tdp, node, tracked_dp_bindings) {
@@ -5054,7 +5058,7 @@ pflow_output_activated_ports_handler(struct engine_node *node, void *data)
         engine_get_input_data("non_vif_data", node);
 
     struct physical_ctx p_ctx;
-    init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
+    init_physical_ctx(node, pfo, rt_data, non_vif_data, &p_ctx);
 
     struct activated_port *pp;
     LIST_FOR_EACH (pp, list, ap->activated_ports) {
@@ -5109,7 +5113,7 @@ pflow_output_evpn_binding_handler(struct engine_node *node, void *data)
         engine_get_input_data("evpn_vtep_binding", node);
 
     struct physical_ctx ctx;
-    init_physical_ctx(node, rt_data, non_vif_data, &ctx);
+    init_physical_ctx(node, pfo, rt_data, non_vif_data, &ctx);
 
     physical_handle_evpn_binding_changes(&ctx, &pfo->flow_table,
                                          &eb_data->updated_bindings,
@@ -5127,7 +5131,8 @@ pflow_output_fdb_handler(struct engine_node *node, void *data)
     struct ed_type_evpn_fdb *ef_data =
         engine_get_input_data("evpn_fdb", node);
 
-    physical_handle_evpn_fdb_changes(&pfo->flow_table, &ef_data->updated_fdbs,
+    physical_handle_evpn_fdb_changes(&pfo->flow_table, pfo->group_table,
+                                     &ef_data->updated_fdbs,
                                      &ef_data->removed_fdbs);
     return EN_HANDLED_UPDATED;
 }
@@ -6712,10 +6717,14 @@ en_evpn_fdb_run(struct engine_node *node, void *data_)
         engine_get_input_data("neighbor_exchange", node);
     const struct ed_type_evpn_vtep_binding *eb_data =
         engine_get_input_data("evpn_vtep_binding", node);
+    const struct ed_type_nexthop_exchange *nhe_data =
+        engine_get_input_data("nexthop_exchange", node);
 
     struct evpn_fdb_ctx_in f_ctx_in = {
         .static_fdbs = &ne_data->static_fdbs,
         .bindings = &eb_data->bindings,
+        .nexthops = &nhe_data->nexthops,
+        .datapaths = &eb_data->datapaths,
     };
 
     struct evpn_fdb_ctx_out f_ctx_out = {
@@ -7216,9 +7225,7 @@ inc_proc_ovn_controller_init(
     engine_add_input(&en_evpn_fdb, &en_neighbor_exchange, NULL);
     engine_add_input(&en_evpn_fdb, &en_evpn_vtep_binding,
                      evpn_fdb_vtep_binding_handler);
-    /* XXX: This is just a place holder and it will be updated later on. */
-    engine_add_input(&en_evpn_fdb, &en_nexthop_exchange,
-                     engine_noop_handler);
+    engine_add_input(&en_evpn_fdb, &en_nexthop_exchange, NULL);
 
     engine_add_input(&en_evpn_arp, &en_neighbor_exchange, NULL);
     engine_add_input(&en_evpn_arp, &en_evpn_vtep_binding,
@@ -7646,6 +7653,7 @@ main(int argc, char *argv[])
     struct ovn_extend_table group_table;
     ovn_extend_table_init(&group_table, "group-table", 0);
     lflow_output_data->group_table = &group_table;
+    pflow_output_data->group_table = &group_table;
 
     ofctrl_init(&group_table, &lflow_output_data->meter_table);
 
