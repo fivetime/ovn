@@ -9,8 +9,12 @@ This document describes the logical flow tables that ``ovn-northd``\(8)
 populates in the ``OVN_Southbound`` database. It covers both logical switch and
 logical router datapath pipelines, as well as drop sampling behavior.
 
+.. _ls-datapaths:
+
 Logical Switch Datapaths
 ------------------------
+
+.. _ls-in-0:
 
 Ingress Table 0: Admission Control and Ingress Port Security check
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -63,6 +67,8 @@ Ingress table 0 contains these logical flows:
   applies the port security rules defined in the ``port_security`` column of
   ``Logical_Switch_Port`` table.
 
+.. _ls-in-1:
+
 Ingress Table 1: Ingress Port Security - Apply
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -102,6 +108,8 @@ Ingress table 1 contains these logical flows:
   chassis with distributed NAT entries. Priority 70: Drops ``REGBIT_EXT_ARP``
   packets on non-gateway chassis (complements the priority 75 flow).
 
+.. _ls-in-2:
+
 Ingress Table 2: Mirror
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -118,6 +126,8 @@ Overlay remote mirror table contains the following logical flows:
 - A logical flow added for each Mirror Rule in Mirror table attached to logical
   switch ports, matches all incoming packets that match rules and clones the
   packet and sends cloned packet to mirror target port.
+
+.. _ls-in-3:
 
 Ingress Table 3: Lookup MAC address learning table
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -152,6 +162,8 @@ learning.
 - One priority-0 fallback flow that matches all packets and advances to the next
   table.
 
+.. _ls-in-4:
+
 Ingress Table 4: Learn MAC of 'unknown' ports.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -173,20 +185,22 @@ true if (port, mac) is found or if a mac is found for a port of type vif.
 - One priority-0 fallback flow that matches all packets and advances to the next
   table.
 
+.. _ls-in-5:
+
 Ingress Table 5: ``from-lport`` Pre-ACLs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This table prepares flows for possible stateful ACL processing in ingress table
-``ACLs``.  It contains a priority-0 flow that simply moves traffic to the next
-table.  If stateful ACLs are used in the logical datapath, a priority-100 flow
-is added that sets a hint (with ``reg0[0] = 1; next;``) for table ``Pre-
-stateful`` to send IP packets to the connection tracker before eventually
-advancing to ingress table ``ACLs``. If special ports such as route ports or
-localnet ports can't use ct(), a priority-110 flow is added to skip over
-stateful ACLs.  This priority-110 flow is not added for router ports if the
-option enable_router_port_acl is set to true in
-``options:enable_router_port_acl`` column of ``Logical_Switch_Port``.
-Multicast, IPv6 Neighbor Discovery and MLD traffic also skips stateful ACLs. For
+:ref:`ACLs <ls-in-9>`.  It contains a priority-0 flow that simply moves traffic
+to the next table.  If stateful ACLs are used in the logical datapath, a
+priority-100 flow is added that sets a hint (with ``reg0[0] = 1; next;``) for
+table :ref:`Pre-stateful <ls-in-7>` to send IP packets to the connection tracker
+before eventually advancing to ingress table :ref:`ACLs <ls-in-9>`. If special
+ports such as route ports or localnet ports can't use ct(), a priority-110 flow
+is added to skip over stateful ACLs.  This priority-110 flow is not added for
+router ports if the option enable_router_port_acl is set to true in
+``options:enable_router_port_acl`` column of ``Logical_Switch_Port``. Multicast,
+IPv6 Neighbor Discovery and MLD traffic also skips stateful ACLs. For
 "allow-stateless" ACLs, a flow is added to bypass setting the hint for
 connection tracker processing when there are stateful ACLs or LB rules;
 ``REGBIT_ACL_STATELESS`` is set for traffic matching stateless ACL flows.
@@ -196,27 +210,29 @@ logical switch datapaths to move traffic to the next table. Where *E* is the
 service monitor mac defined in the ``options:svc_monitor_mac`` column of
 ``NB_Global`` table.
 
+.. _ls-in-6:
+
 Ingress Table 6: Pre-LB
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 This table prepares flows for possible stateful load balancing processing in
-ingress table ``LB`` and ``Stateful``.  It contains a priority-0 flow that
-simply moves traffic to the next table. Moreover it contains two priority-110
-flows to move multicast, IPv6 Neighbor Discovery and MLD traffic to the next
-table. It also contains two priority-110 flows to move stateless traffic, i.e
-traffic for which ``REGBIT_ACL_STATELESS`` is set, to the next table. If load
-balancing rules with virtual IP addresses (and ports) are configured in
-``OVN_Northbound`` database for a logical switch datapath, a priority-100 flow
-is added with the match ``ip`` to match on IP packets and sets the action
-``reg0[2] = 1; next;`` to act as a hint for table ``Pre-stateful`` to send IP
-packets to the connection tracker for packet de-fragmentation (and to possibly
-do DNAT for already established load balanced traffic) before eventually
-advancing to ingress table ``Stateful``. If controller_event has been enabled
-and load balancing rules with empty backends have been added in
-``OVN_Northbound``, a 130 flow is added to trigger ovn-controller events
-whenever the chassis receives a packet for that particular VIP. If ``event-elb``
-meter has been previously created, it will be associated to the empty_lb logical
-flow
+ingress table :ref:`LB <ls-in-15>` and :ref:`Stateful <ls-in-24>`.  It contains
+a priority-0 flow that simply moves traffic to the next table. Moreover it
+contains two priority-110 flows to move multicast, IPv6 Neighbor Discovery and
+MLD traffic to the next table. It also contains two priority-110 flows to move
+stateless traffic, i.e traffic for which ``REGBIT_ACL_STATELESS`` is set, to the
+next table. If load balancing rules with virtual IP addresses (and ports) are
+configured in ``OVN_Northbound`` database for a logical switch datapath, a
+priority-100 flow is added with the match ``ip`` to match on IP packets and sets
+the action ``reg0[2] = 1; next;`` to act as a hint for table :ref:`Pre-stateful
+<ls-in-7>` to send IP packets to the connection tracker for packet
+de-fragmentation (and to possibly do DNAT for already established load balanced
+traffic) before eventually advancing to ingress table :ref:`Stateful
+<ls-in-24>`. If controller_event has been enabled and load balancing rules with
+empty backends have been added in ``OVN_Northbound``, a 130 flow is added to
+trigger ovn-controller events whenever the chassis receives a packet for that
+particular VIP. If ``event-elb`` meter has been previously created, it will be
+associated to the empty_lb logical flow
 
 Prior to ``OVN 20.09`` we were setting the ``reg0[0] = 1`` only if the IP
 destination matches the load balancer VIP. However this had few issues cases
@@ -253,6 +269,8 @@ peer of a logical router port. This flow is added to skip the connection
 tracking of packets which enter from logical router datapath to logical switch
 datapath.
 
+.. _ls-in-7:
+
 Ingress Table 7: Pre-stateful
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -277,6 +295,8 @@ It contains a priority-0 flow that simply moves traffic to the next table.
 - A priority-100 flow sends the packets to connection tracker based on a hint
   provided by the previous tables (with a match for ``reg0[0] == 1``) by using
   the ``ct_next;`` action.
+
+.. _ls-in-8:
 
 Ingress Table 8: ``from-lport`` ACL hints
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -328,6 +348,8 @@ The table contains the following flows:
 - A priority-1 flow that matches on packets that are part of an established
   session that has not been marked as blocked. This flow sets ``reg0[10]`` and
   then advances to the next table.
+
+.. _ls-in-9:
 
 Ingress table 9: ``from-lport`` ACL evaluation before LB
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -432,8 +454,8 @@ configured, the following flows will also be added:
   accomplishes the same thing but also logs the traffic.
 
 - The priority-65532 flows that allow response and related traffic, also set
-  ``reg8[21] = ct_label.nf``, which gets checked in the ``Network Function``
-  table.
+  ``reg8[21] = ct_label.nf``, which gets checked in the :ref:`Network Function
+  <ls-in-25>` table.
 
 - A priority-65532 flow that sets the allow bit for any traffic that is
   considered related to a committed flow in the connection tracker (e.g., an
@@ -461,6 +483,8 @@ following flow will also be added:
   monitor mac defined in the ``options:svc_monitor_mac`` column of ``NB_Global``
   table.
 
+.. _ls-in-10:
+
 Ingress Table 10: ``from-lport`` ACL sampling
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -485,6 +509,8 @@ sampling enabled.
   the packet to the next table.  Note: this flow is installed in the opposite
   pipeline (in the ingress pipeline for ACLs applied in the egress direction and
   in the egress pipeline for ACLs applied in the ingress direction).
+
+.. _ls-in-11:
 
 Ingress Table 11: ``from-lport`` ACL action
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -511,6 +537,8 @@ allow, drop, and reject bits that may have been set in the previous table.
   counter is incremented by one and the packet is sent back to the previous
   table for re-evaluation.
 
+.. _ls-in-12:
+
 Ingress Table 12: ``from-lport`` QoS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -525,6 +553,8 @@ for the ``from-lport`` direction.
 - One priority-0 fallback flow that matches all packets and advances to the next
   table.
 
+.. _ls-in-13:
+
 Ingress Table 13: Connection Tracking Field Extraction
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -537,6 +567,8 @@ subsequent load balancing stages.
   ``reg1[16..23] = ct_proto(); reg1[0..15] = ct_tp_dst(); next;``.
 
 - A priority-0 flow matches all packets and advances to the next table.
+
+.. _ls-in-14:
 
 Ingress Table 14: Load balancing affinity check
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -554,6 +586,8 @@ Load balancing affinity check table contains the following logical flows:
 
 - A priority 0 flow is added which matches on all packets and applies the action
   ``next;``.
+
+.. _ls-in-15:
 
 Ingress Table 15: LB
 ~~~~~~~~~~~~~~~~~~~~~
@@ -595,7 +629,7 @@ Ingress Table 15: LB
   == VIP``. The action on this flow is ``ct_lb_mark(args)``, where *args*
   contains comma separated IP addresses of the same address family as *VIP*. For
   IPv4 traffic the flow also loads the original destination IP and transport
-  port in registers ``reg1`` and ``reg2``.  For IPv6 traffic the flow also loads
+  port in registers ``reg1`` and ``reg2``. For IPv6 traffic the flow also loads
   the original destination IP and transport port in registers ``xxreg1`` and
   ``reg2``. The above flow is created even if the load balancer is attached to a
   logical router connected to the current logical switch and the
@@ -607,6 +641,8 @@ Ingress Table 15: LB
   (for all other kind of traffic) will be sent whenever an incoming packet is
   received for this load-balancer. Please note using ``--reject`` option will
   disable empty_lb SB controller event for this load balancer.
+
+.. _ls-in-16:
 
 Ingress Table 16: Load balancing affinity learn
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -625,6 +661,8 @@ Load balancing affinity learn table contains the following logical flows:
 - A priority 0 flow is added which matches on all packets and applies the action
   ``next;``.
 
+.. _ls-in-17:
+
 Ingress Table 17: Pre-Hairpin
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -636,6 +674,8 @@ Ingress Table 17: Pre-Hairpin
   table.
 
 - A priority-0 flow that simply moves traffic to the next table.
+
+.. _ls-in-18:
 
 Ingress Table 18: Nat-Hairpin
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -659,6 +699,8 @@ Ingress Table 18: Nat-Hairpin
 
 - A priority-0 flow that simply moves traffic to the next table.
 
+.. _ls-in-19:
+
 Ingress Table 19: Hairpin
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -677,13 +719,15 @@ Ingress Table 19: Hairpin
 - If logical switch has attached logical switch port of *vtep* type, then a
   priority-1000 flow that matches on ``reg0[14]`` register bit for the traffic
   received from HW VTEP (ramp) ports.  This traffic is passed to ingress table
-  ls_in_l2_lkup.
+  :ref:`Destination Lookup <ls-in-32>`.
 
 - A priority-1 flow that hairpins traffic matched by non-default flows in the
-  Pre-Hairpin table. Hairpinning is done at L2, Ethernet addresses are swapped
-  and the packets are looped back on the input port.
+  :ref:`Pre-Hairpin <ls-in-17>` table. Hairpinning is done at L2, Ethernet
+  addresses are swapped and the packets are looped back on the input port.
 
 - A priority-0 flow that simply moves traffic to the next table.
+
+.. _ls-in-20:
 
 Ingress table 20: ``from-lport`` ACL evaluation after LB
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -740,6 +784,8 @@ ACL's match.
 - One priority-0 fallback flow that matches all packets and advances to the next
   table.
 
+.. _ls-in-21:
+
 Ingress Table 21: ``from-lport`` ACL sampling after LB
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -765,6 +811,8 @@ Logical flows in this table sample traffic matched by ``from-lport`` ACLs
   pipeline (in the ingress pipeline for ACLs applied in the egress direction and
   in the egress pipeline for ACLs applied in the ingress direction).
 
+.. _ls-in-22:
+
 Ingress Table 22: ``from-lport`` ACL action after LB
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -789,6 +837,8 @@ allow, drop, and reject bits that may have been set in the previous table.
   installed. If the current tier counter is 0, 1, or 2, then the current tier
   counter is incremented by one and the packet is sent back to the previous
   table for re-evaluation.
+
+.. _ls-in-23:
 
 Ingress Table 23: Pre Network Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -838,6 +888,8 @@ future, this stage will be extended to support network function load balancing.
 
 - A priority-0 flow that simply moves traffic to the next table.
 
+.. _ls-in-24:
+
 Ingress Table 24: Stateful
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -860,6 +912,8 @@ Ingress Table 24: Stateful
   redirected to it as well.
 
 - A priority-0 flow that simply moves traffic to the next table.
+
+.. _ls-in-25:
 
 Ingress Table 25: Network Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -891,7 +945,8 @@ refer to either the parent or child ports as applicable to this logical switch.
   ``reg5[16..31] = ct_label.tun_if_id``. This is used for tunneling packet to
   originating host in case of cross host traffic redirection for VLAN subnet.
   This ct_label field stores the openflow tunnel interface id of the originating
-  host for this connection and gets populated in egress ``Stateful`` table.
+  host for this connection and gets populated in egress :ref:`Stateful
+  <ls-out-12>` table.
 
 - For each active network function with *id* that is referenced in a network
   function group, a priority-99 flow matches ``reg8[21] == 1 && reg8[22] == 1 &&
@@ -922,6 +977,8 @@ refer to either the parent or child ports as applicable to this logical switch.
 
 - One priority-0 fallback flow that matches all packets and advances to the next
   table.
+
+.. _ls-in-26:
 
 Ingress Table 26: ARP/ND responder
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1156,6 +1213,8 @@ proxy ARP/ND behavior.  It contains these logical flows:
 - One priority-0 fallback flow that matches all packets and advances to the next
   table.
 
+.. _ls-in-27:
+
 Ingress Table 27: DHCP option processing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1188,6 +1247,8 @@ options. This table also adds flows for the logical ports of type ``external``.
   0 into reg0[3]. Either way, it continues to the next table.
 
 - A priority-0 flow that matches all packets to advances to table 16.
+
+.. _ls-in-28:
 
 Ingress Table 28: DHCP responses
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1242,6 +1303,8 @@ previous table.
 
 - A priority-0 flow that matches all packets to advances to table 17.
 
+.. _ls-in-29:
+
 Ingress Table 29 DNS Lookup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1259,6 +1322,8 @@ IP address(es).
   name can be resolved, and stores 1 into reg0[4]. For failed DNS resolution or
   other kinds of packets, it just stores 0 into reg0[4]. Either way, it
   continues to the next table.
+
+.. _ls-in-30:
 
 Ingress Table 30 DNS Responses
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1282,6 +1347,8 @@ previous table.
 
   (This terminates ingress packet processing; the packet does not go to the next
   ingress table.)
+
+.. _ls-in-31:
 
 Ingress table 31 External ports
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1308,6 +1375,8 @@ traffic from these ports.
 
 - A priority-0 flow that matches all packets to advances to table 20.
 
+.. _ls-in-32:
+
 Ingress Table 32 Destination Lookup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1327,8 +1396,8 @@ This table implements switching behavior.  It contains these logical flows:
 
 - A priority-100 flow that matches ``reg8[23] == 1`` and does ``output`` action.
   This ensures that packets that got injected back into this table from egress
-  table ``Network Function`` (after it set the ``outport`` for packet
-  redirection) get forwarded without any further processing.
+  table :ref:`Network Function <ls-out-13>` (after it set the ``outport`` for
+  packet redirection) get forwarded without any further processing.
 
 - For any logical port that's defined as a target of routing protocol
   redirecting (via ``routing-protocol-redirect`` option set on Logical Router
@@ -1459,6 +1528,8 @@ This table implements switching behavior.  It contains these logical flows:
   If there is no entry for ``eth.dst`` in the MAC learning table, then it stores
   ``none`` in the ``outport``.
 
+.. _ls-in-33:
+
 Ingress Table 33 Destination unknown
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1486,28 +1557,35 @@ following flows.
 - One priority-0 fallback flow that outputs the packet to the egress stage with
   the outport learnt from ``get_fdb`` action.
 
+.. _ls-out-0:
+
 Egress Table 0: Lookup MAC address learning table
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to ingress table ``Lookup MAC address learning table`` with the
-difference that MAC address learning lookup is only happening for ports with
-type ``remote`` whose port security is disabled and 'unknown' address set.  This
-stage facilitates MAC learning on a transit switch connecting multiple
-availability zones.
+This is similar to ingress table :ref:`Lookup MAC address learning table
+<ls-in-3>` with the difference that MAC address learning lookup is only
+happening for ports with type ``remote`` whose port security is disabled and
+'unknown' address set.  This stage facilitates MAC learning on a transit switch
+connecting multiple availability zones.
+
+.. _ls-out-1:
 
 Egress Table 1: Learn MAC of 'unknown' ports.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to ingress table ``Learn MAC of 'unknown' ports`` with the
-difference that MAC address learning is only happening for ports with type
-``remote`` whose port security is disabled and 'unknown' address set.  This
+This is similar to ingress table :ref:`Learn MAC of 'unknown' ports <ls-in-4>`
+with the difference that MAC address learning is only happening for ports with
+type ``remote`` whose port security is disabled and 'unknown' address set.  This
 stage facilitates MAC learning on a transit switch connecting multiple
 availability zones.
+
+.. _ls-out-2:
 
 Egress Table 2: ``to-lport`` Pre-ACLs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to ingress table ``Pre-ACLs`` except for ``to-lport`` traffic.
+This is similar to ingress table :ref:`Pre-ACLs <ls-in-5>` except for
+``to-lport`` traffic.
 
 This table also has a priority-110 flow with the match ``eth.src == E`` for all
 logical switch datapaths to move traffic to the next table. Where *E* is the
@@ -1522,23 +1600,26 @@ switch datapath for routing.
 
 This table also has a priority-110 flow for each network_function ``inport`` *P*
 that matches ``inport == P``. The action is to skip all the egress tables up to
-the ``Network Function`` table and advance the packet directly to the table
-after that. This is for the case where packet redirection happens in egress
-``Network Function`` table. The same packet when it comes out of the other port
-of network function, they should not be processed again by the same egress
-stages, specially they should skip the conntrack processing.
+the :ref:`Network Function <ls-out-13>` table and advance the packet directly to
+the table after that. This is for the case where packet redirection happens in
+egress :ref:`Network Function <ls-out-13>` table. The same packet when it comes
+out of the other port of network function, they should not be processed again by
+the same egress stages, specially they should skip the conntrack processing.
+
+.. _ls-out-3:
 
 Egress Table 3: Pre-LB
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-This table is similar to ingress table ``Pre-LB``.  It contains a priority-0
-flow that simply moves traffic to the next table. Moreover it contains two
-priority-110 flows to move multicast, IPv6 Neighbor Discovery and MLD traffic to
-the next table. If any load balancing rules exist for the datapath, a
-priority-100 flow is added with a match of ``ip`` and action of ``reg0[2] = 1;
-next;`` to act as a hint for table ``Pre-stateful`` to send IP packets to the
-connection tracker for packet de-fragmentation and possibly DNAT the destination
-VIP to one of the selected backend for already committed load balanced traffic.
+This table is similar to ingress table :ref:`Pre-LB <ls-in-6>`.  It contains a
+priority-0 flow that simply moves traffic to the next table. Moreover it
+contains two priority-110 flows to move multicast, IPv6 Neighbor Discovery and
+MLD traffic to the next table. If any load balancing rules exist for the
+datapath, a priority-100 flow is added with a match of ``ip`` and action of
+``reg0[2] = 1; next;`` to act as a hint for table :ref:`Pre-stateful <ls-out-4>`
+to send IP packets to the connection tracker for packet de-fragmentation and
+possibly DNAT the destination VIP to one of the selected backend for already
+committed load balanced traffic.
 
 This table also has a priority-110 flow with the match ``eth.src == E`` for all
 logical switch datapaths to move traffic to the next table. Where *E* is the
@@ -1555,11 +1636,13 @@ When ``enable-stateless-acl-with-lb`` is enabled, additional priority-115 flow
 is added to match traffic with ``REGBIT_ACL_STATELESS`` set and pass connection
 tracking.
 
+.. _ls-out-4:
+
 Egress Table 4: Pre-stateful
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to ingress table ``Pre-stateful``.  This table adds the below 3
-logical flows.
+This is similar to ingress table :ref:`Pre-stateful <ls-in-7>`.  This table adds
+the below 3 logical flows.
 
 - A Priority-120 flow that send the packets to connection tracker using
   ``ct_lb_mark;`` as the action so that the already established traffic gets
@@ -1574,22 +1657,26 @@ logical flows.
 
 - A priority-0 flow that matches all packets to advance to the next table.
 
+.. _ls-out-5:
+
 Egress Table 5: ``from-lport`` ACL hints
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to ingress table ``ACL hints``.
+This is similar to ingress table :ref:`ACL hints <ls-in-8>`.
+
+.. _ls-out-6:
 
 Egress Table 6: ``to-lport`` ACL evaluation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to ingress table ``ACL eval`` except for ``to-lport`` ACLs. As a
-reminder, these flows use the following register bits to indicate their
-verdicts. ``Allow-type`` ACLs set ``reg8[16]``, ``drop`` ACLs set ``reg8[17]``,
-and ``reject`` ACLs set ``reg8[18]``.
+This is similar to ingress table :ref:`ACL eval <ls-in-9>` except for
+``to-lport`` ACLs. As a reminder, these flows use the following register bits to
+indicate their verdicts. ``Allow-type`` ACLs set ``reg8[16]``, ``drop`` ACLs set
+``reg8[17]``, and ``reject`` ACLs set ``reg8[18]``.
 
 Also like with ingress ACLs, egress ACLs can have network_function_group *id*
 and in that case the flow will set ``reg8[21] = 1; reg8[22] = 1; reg0[22..29] =
-id``. These registers are used in the ``Network Function`` table.
+id``. These registers are used in the :ref:`Network Function <ls-out-13>` table.
 
 Also like with ingress ACLs, egress ACLs can have a configured ``tier``. If a
 tier is configured, then the current tier counter is evaluated against the ACL's
@@ -1604,13 +1691,13 @@ In addition, the following flows are added.
 
 - A priority 34000 logical flow is added for each logical port which has DHCPv4
   options defined to allow the DHCPv4 reply packet and which has DHCPv6 options
-  defined to allow the DHCPv6 reply packet from the ``Ingress Table 26: DHCP
-  responses``. This is indicated by setting the allow bit.
+  defined to allow the DHCPv6 reply packet from :ref:`Ingress Table 28: DHCP
+  responses <ls-in-28>`. This is indicated by setting the allow bit.
 
 - A priority 34000 logical flow is added for each logical switch datapath
   configured with DNS records with the match ``udp.dst = 53`` to allow the DNS
-  reply packet from the ``Ingress Table 28: DNS responses``. This is indicated
-  by setting the allow bit.
+  reply packet from :ref:`Ingress Table 30: DNS responses <ls-in-30>`. This is
+  indicated by setting the allow bit.
 
 - A priority 34000 logical flow is added for each logical switch datapath with
   the match ``eth.src = E`` to allow the service monitor request packet
@@ -1618,15 +1705,21 @@ In addition, the following flows are added.
   service monitor mac defined in the ``options:svc_monitor_mac`` column of
   ``NB_Global`` table. This is indicated by setting the allow bit.
 
+.. _ls-out-7:
+
 Egress Table 7: ``to-lport`` ACL sampling
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to ingress table ``ACL sampling``.
+This is similar to ingress table :ref:`ACL sampling <ls-in-10>`.
+
+.. _ls-out-8:
 
 Egress Table 8: ``to-lport`` ACL action
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to ingress table ``ACL action``.
+This is similar to ingress table :ref:`ACL action <ls-in-11>`.
+
+.. _ls-out-9:
 
 Egress Table 9: Mirror
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1645,11 +1738,15 @@ Overlay remote mirror table contains the following logical flows:
   switch ports, matches all outcoming packets that match rules and clones the
   packet and sends cloned packet to mirror target port.
 
+.. _ls-out-10:
+
 Egress Table 10: ``to-lport`` QoS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to ingress table ``QoS`` except they apply to ``to-lport`` QoS
-rules.
+This is similar to ingress table :ref:`QoS <ls-in-12>` except they apply to
+``to-lport`` QoS rules.
+
+.. _ls-out-11:
 
 Egress Table 11: Pre Network Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1699,12 +1796,15 @@ support network function load balancing.
 
 - A priority-0 flow that simply moves traffic to the next table.
 
+.. _ls-out-12:
+
 Egress Table 12: Stateful
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to ingress table ``Stateful`` except that there are no rules
-added for load balancing new connections. When ``enable-stateless-acl-with-lb``
-is enabled, new stateless connections bypass connection tracking.
+This is similar to ingress table :ref:`Stateful <ls-in-24>` except that there
+are no rules added for load balancing new connections. When
+``enable-stateless-acl-with-lb`` is enabled, new stateless connections bypass
+connection tracking.
 
 - A priority 120 flow is added for each network function port *P* that is
   identical to the priority 100 flow except for additional match ``outport ==
@@ -1718,6 +1818,8 @@ is enabled, new stateless connections bypass connection tracking.
   packet back to host1. This is required to make cross host traffic redirection
   work for VLAN subnet.
 
+.. _ls-out-13:
+
 Egress Table 13: Network Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1729,19 +1831,20 @@ packets are handled in the ingress pipeline, but corresponding response/related
 packets for those flows are redirected here using the network function ID stored
 in ``ct_label.nf_id`` during request processing.
 
-- Similar to ingress ``Network Function`` a priority-100 flow is added for each
-  network_function port, that matches the inport with the network function port
-  and advances the packet to the next table.
+- Similar to ingress :ref:`Network Function <ls-in-25>` a priority-100 flow is
+  added for each network_function port, that matches the inport with the network
+  function port and advances the packet to the next table.
 
 - For each active network function with *id* that is referenced in a network
   function group, a priority-99 flow matches ``reg8[21] == 1 && reg8[22] == 1 &&
   reg0[22..29] == id`` and sets ``outport=P; reg8[23] = 1;
   next(pipeline=ingress, table=T)`` where *P* is the ``outport`` of that network
-  function and *T* is the ingress table ``Destination Lookup``. This redirects
-  request packets matching ``to-lport`` ACLs with network_function_group to the
-  specific network function selected by the Pre Network Function stage. The
-  packets are injected back to the ingress pipeline from where they get sent
-  out, skipping any further lookup because of ``reg8[23]``.
+  function and *T* is the ingress table :ref:`Destination Lookup <ls-in-32>`.
+  This redirects request packets matching ``to-lport`` ACLs with
+  network_function_group to the specific network function selected by the Pre
+  Network Function stage. The packets are injected back to the ingress pipeline
+  from where they get sent out, skipping any further lookup because of
+  ``reg8[23]``.
 
 - For each active network function with *id* that is referenced in a network
   function group, a priority-99 rule matches ``reg8[21] == 1 && reg8[22] == 0 &&
@@ -1754,18 +1857,21 @@ in ``ct_label.nf_id`` during request processing.
   the other port of the network_function, it would match the priority 100 flow
   and be forwarded to the next table.
 
-- One priority-100 multicast match flow same as ingress ``Network Function``.
+- One priority-100 multicast match flow same as ingress :ref:`Network Function
+  <ls-in-25>`.
 
-- One priority-1 flow same as ingress ``Network Function``.
+- One priority-1 flow same as ingress :ref:`Network Function <ls-in-25>`.
 
-- One priority-0 flow same as ingress ``Network Function``.
+- One priority-0 flow same as ingress :ref:`Network Function <ls-in-25>`.
+
+.. _ls-out-14:
 
 Egress Table 14: Egress Port Security - check
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to the port security logic in table ``Ingress Port Security
-check`` except that action ``check_out_port_sec`` is used to check the port
-security rules.  This table adds the below logical flows.
+This is similar to the port security logic in table :ref:`Ingress Port Security
+check <ls-in-0>` except that action ``check_out_port_sec`` is used to check the
+port security rules.  This table adds the below logical flows.
 
 - A priority 100 flow which matches on the multicast traffic and applies the
   action ``REGBIT_PORT_SEC_DROP" = 0; next;"`` to skip the out port security
@@ -1777,13 +1883,15 @@ security rules.  This table adds the below logical flows.
   addresses defined in the ``port_security`` column of ``Logical_Switch_Port``
   table before delivering the packet to the ``outport``.
 
+.. _ls-out-15:
+
 Egress Table 15: Egress Port Security - Apply
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This is similar to the ingress port security logic in ingress table ``A Ingress
-Port Security - Apply``.  This table drops the packets if the port security
-check failed in the previous stage i.e the register bit ``REGBIT_PORT_SEC_DROP``
-is set to 1.
+This is similar to the ingress port security logic in ingress table
+:ref:`Ingress Port Security - Apply <ls-in-1>`.  This table drops the packets if
+the port security check failed in the previous stage i.e the register bit
+``REGBIT_PORT_SEC_DROP`` is set to 1.
 
 The following flows are added.
 
@@ -1805,11 +1913,15 @@ The following flows are added.
 
 - A priority-0 flow that outputs the packet to the ``outport``.
 
+.. _lr-datapaths:
+
 Logical Router Datapaths
 ------------------------
 
 Logical router datapaths will only exist for ``Logical_Router`` rows in the OVN
 Northbound database that do not have ``enabled`` set to ``false``
+
+.. _lr-in-0:
 
 Ingress Table 0: L2 Admission Control
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1865,6 +1977,8 @@ Ethernet headers.  It contains the following flows:
   ``1``) and drops them (action ``drop;``).
 
 Other packets are implicitly dropped.
+
+.. _lr-in-1:
 
 Ingress Table 1: Neighbor lookup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1946,6 +2060,8 @@ Following flows are added:
 - A priority-0 fallback flow that matches all packets and applies the action
   ``reg9[2] = 1; next;`` advancing the packet to the next table.
 
+.. _lr-in-2:
+
 Ingress Table 2: Neighbor learning
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1981,6 +2097,8 @@ packet (if reg9[2] is 0).
 
 - A priority-0 logical flow that matches all packets not already handled (match
   ``1``) and drops them (action ``drop;``).
+
+.. _lr-in-3:
 
 Ingress Table 3: IP Input
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2372,6 +2490,8 @@ traffic, potentially for forwarding:
   and uses actions ``next;`` to feed them to the next table.
 
 
+.. _lr-in-4:
+
 Ingress Table 4: DHCP Relay Request
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2396,6 +2516,8 @@ action is applied in the IP input stage.
   ``dhcp_relay_req_chk`` action was unsuccessful.
 
 - A priority-0 flow that matches all packets to advance to the next table.
+
+.. _lr-in-5:
 
 Ingress Table 5: UNSNAT
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2463,6 +2585,8 @@ pipeline as part of a reply.  It is unSNATted here.
 
   A priority-0 logical flow with match ``1`` has actions ``next;``.
 
+.. _lr-in-6:
+
 Ingress Table 6: POST USNAT
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2476,6 +2600,8 @@ next;`` Which sets one of the flags that is used in later stages. There is extra
 match on both when there is configured DGP ``inport == DGP &&
 is_chassis_resident(CHASSIS)``.
 
+.. _lr-in-7:
+
 Ingress Table 7: DEFRAG
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2484,8 +2610,8 @@ It contains a priority-0 flow that simply moves traffic to the next table.
 
 For all load balancing rules that are configured in ``OVN_Northbound`` database
 for a Gateway router, a priority-100 flow is added for each configured virtual
-IP address *VIP*. For IPv4 *VIPs* the flow matches ``ip && ip4.dst == VIP``.
-For IPv6 *VIPs*, the flow matches ``ip && ip6.dst == VIP``. The flow applies the
+IP address *VIP*. For IPv4 *VIPs* the flow matches ``ip && ip4.dst == VIP``. For
+IPv6 *VIPs*, the flow matches ``ip && ip6.dst == VIP``. The flow applies the
 action ``ct_dnat;`` to send IP packets to the connection tracker for packet de-
 fragmentation and to dnat the destination IP for the committed connection before
 sending it to the next table.
@@ -2511,6 +2637,8 @@ configured matching on ``ip && (!ct.trk || !ct.rpl)`` with an action
 ``ct_next(dnat);``. There is extra match when the LR is configured as DGP
 ``inport == DGP && is_chassis_resident(CHASSIS)``.
 
+.. _lr-in-8:
+
 Ingress Table 8: Connection tracking field extraction
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2530,6 +2658,8 @@ them in registers for use by subsequent load balancing stages.
 - A priority-0 flow that matches all packets and advances to the next table with
   action ``next;``.
 
+.. _lr-in-9:
+
 Ingress Table 9: Load balancing affinity check
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2546,6 +2676,8 @@ Load balancing affinity check table contains the following logical flows:
 
 - A priority 0 flow is added which matches on all packets and applies the action
   ``next;``.
+
+.. _lr-in-10:
 
 Ingress Table 10: DNAT
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -2603,9 +2735,9 @@ flows do not get programmed for load balancers with IPv6 *VIPs*.
   ``skip_snat`` set to true, the above action will be replaced by
   ``flags.skip_snat_for_lb = 1; ct_lb_mark(args; skip_snat);``.
 
-  The previous table ``lr_in_defrag`` sets the register ``reg0`` (or ``xxreg0``
-  for IPv6) and does ``ct_dnat``.  Hence for established traffic, this table
-  just advances the packet to the next stage.
+  The previous table :ref:`DEFRAG <lr-in-7>` sets the register ``reg0`` (or
+  ``xxreg0`` for IPv6) and does ``ct_dnat``.  Hence for established traffic,
+  this table just advances the packet to the next stage.
 
 - If the load balancer is created with ``--reject`` option and it has no active
   backends, a TCP reset segment (for tcp) or an ICMP port unreachable packet
@@ -2694,6 +2826,8 @@ the egress pipeline.
 
   A priority-0 logical flow with match ``1`` has actions ``next;``.
 
+.. _lr-in-11:
+
 Ingress Table 11: Load balancing affinity learn
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2710,6 +2844,8 @@ Load balancing affinity learn table contains the following logical flows:
 - A priority 0 flow is added which matches on all packets and applies the action
   ``next;``.
 
+.. _lr-in-12:
+
 Ingress Table 12: ECMP symmetric reply processing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2723,6 +2859,8 @@ Ingress Table 12: ECMP symmetric reply processing
   K;}; commit_ecmp_nh(); next;`` to commit the connection and storing
   ``eth.src`` and the ECMP reply port binding tunnel key *K* in the ``ct_label``
   and the traffic pattern to table ``76`` or ``77``.
+
+.. _lr-in-13:
 
 Ingress Table 13: IPv6 ND RA option processing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2740,6 +2878,8 @@ Ingress Table 13: IPv6 ND RA option processing
   continues to the next table.
 
 - A priority-0 logical flow with match ``1`` has actions ``next;``.
+
+.. _lr-in-14:
 
 Ingress Table 14: IPv6 ND RA responder
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2769,6 +2909,8 @@ by the previous table.
 
 - A priority-0 logical flow with match ``1`` has actions ``next;``.
 
+.. _lr-in-15:
+
 Ingress Table 15: IP Routing Pre
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2786,6 +2928,8 @@ This table contains the following logical flows:
 
   A priority-0 logical flow with match ``1`` has actions ``reg7 = 0; next;``.
 
+.. _lr-in-16:
+
 Ingress Table 16: IP Routing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2795,8 +2939,9 @@ setting ``reg0`` (or ``xxreg0`` for IPv6) to the next-hop IP address (leaving
 ``ip4.dst`` or ``ip6.dst``, the packet's final destination, unchanged) and
 advances to the next table for ARP resolution.  It also sets ``reg1`` (or
 ``xxreg1``) to the IP address owned by the selected router port (ingress table
-``ARP Request`` will generate an ARP request, if needed, with ``reg0`` as the
-target protocol address and ``reg1`` as the source protocol address).
+:ref:`ARP Request <lr-in-27>` will generate an ARP request, if needed, with
+``reg0`` as the target protocol address and ``reg1`` as the source protocol
+address).
 
 For ECMP routes, i.e. multiple static routes with same policy and prefix but
 different nexthops, the above actions are deferred to next table.  This table,
@@ -2918,6 +3063,8 @@ This table contains the following logical flows:
 - A priority-0 logical flow that matches all packets not already handled (match
   ``1``) and drops them (action ``drop;``).
 
+.. _lr-in-17:
+
 Ingress Table 17: IP_ROUTING_ECMP
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2928,8 +3075,9 @@ setting ``reg0`` (or ``xxreg0`` for IPv6) to the next-hop IP address (leaving
 ``ip4.dst`` or ``ip6.dst``, the packet's final destination, unchanged) and
 advances to the next table for ARP resolution.  It also sets ``reg1`` (or
 ``xxreg1``) to the IP address owned by the selected router port (ingress table
-``ARP Request`` will generate an ARP request, if needed, with ``reg0`` as the
-target protocol address and ``reg1`` as the source protocol address).
+:ref:`ARP Request <lr-in-27>` will generate an ARP request, if needed, with
+``reg0`` as the target protocol address and ``reg1`` as the source protocol
+address).
 
 This processing is skipped for reply traffic being sent out of an ECMP route if
 the route was configured to use symmetric replies.
@@ -2950,6 +3098,8 @@ This table contains the following logical flows:
 
 - A priority-0 logical flow that matches all packets not already handled (match
   ``1``) and drops them (action ``drop;``).
+
+.. _lr-in-18:
 
 Ingress Table 18: Router policies
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2990,6 +3140,8 @@ table documentation in ``ovn-nb`` for supported actions.
   ``not`` drop, then the action also includes ``pkt.mark = m`` to mark the
   packet with the marker *m*.
 
+.. _lr-in-19:
+
 Ingress Table 19: ECMP handling for router policies
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -3018,6 +3170,8 @@ nexthops.
 - A priority-0 logical flow that matches all packets not already handled (match
   ``1``) and drops them (action ``drop;``).
 
+.. _lr-in-20:
+
 Ingress Table 20: DHCP Relay Response Check
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -3035,6 +3189,8 @@ This stage process the DHCP response packets coming from the DHCP server.
   the packet and stores 1 into reg9[8] else stores 0 into reg9[8].
 
 - A priority-0 flow that matches all packets to advance to the next table.
+
+.. _lr-in-21:
 
 Ingress Table 21: DHCP Relay Response
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3060,6 +3216,8 @@ action is applied in the previous stage.
   unsuccessful.
 
 - A priority-0 flow that matches all packets to advance to the next table.
+
+.. _lr-in-22:
 
 Ingress Table 22: ARP/ND Resolution
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3142,11 +3300,11 @@ contains the final destination.)  This table resolves the IP address in ``reg0``
   xxreg0); next;`` for IPv6.
 
 - Traffic with IP destination an address owned by the router should be dropped.
-  Such traffic is normally dropped in ingress table ``IP Input`` except for IPs
-  that are also shared with SNAT rules. However, if there was no unSNAT
-  operation that happened successfully until this point in the pipeline and the
-  destination IP of the packet is still a router owned IP, the packets can be
-  safely dropped.
+  Such traffic is normally dropped in ingress table :ref:`IP Input <lr-in-3>`
+  except for IPs that are also shared with SNAT rules. However, if there was no
+  unSNAT operation that happened successfully until this point in the pipeline
+  and the destination IP of the packet is still a router owned IP, the packets
+  can be safely dropped.
 
   A priority-2 logical flow with match ``ip4.dst = {..}`` matches on traffic
   destined to router owned IPv4 addresses which are also SNAT IPs. This flow has
@@ -3160,9 +3318,9 @@ contains the final destination.)  This table resolves the IP address in ``reg0``
   ``1``) and drops them (action ``drop;``).
 
 - Dynamic MAC bindings.  These flows resolve MAC-to-IP bindings that have become
-  known dynamically through ARP or neighbor discovery.  (The ingress table ``ARP
-  Request`` will issue an ARP or neighbor solicitation request for cases where
-  the binding is not yet known.)
+  known dynamically through ARP or neighbor discovery.  (The ingress table
+  :ref:`ARP Request <lr-in-27>` will issue an ARP or neighbor solicitation
+  request for cases where the binding is not yet known.)
 
   A priority-0 logical flow with match ``ip4`` has actions ``get_arp(outport,
   reg0); next;``.
@@ -3174,6 +3332,8 @@ contains the final destination.)  This table resolves the IP address in ``reg0``
   priority-50 flow will match ``outport == "ROUTER_PORT" and
   !is_chassis_resident("cr-ROUTER_PORT")`` has actions ``eth.dst = E; next;``,
   where *E* is the ethernet address of the logical router port.
+
+.. _lr-in-23:
 
 Ingress Table 23: Check packet length
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3197,6 +3357,8 @@ flow is added, with priority-55, to bypass the ``check_pkt_larger`` flow.
 
 This table adds one priority-0 fallback flow that matches all packets and
 advances to the next table.
+
+.. _lr-in-24:
 
 Ingress Table 24: Handle larger packets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3244,6 +3406,8 @@ respectively::
 
 This table adds one priority-0 fallback flow that matches all packets and
 advances to the next table.
+
+.. _lr-in-25:
 
 Ingress Table 25: Gateway Redirect
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3293,6 +3457,8 @@ following flows:
 
 - A priority-0 logical flow with match ``1`` has actions ``next;``.
 
+.. _lr-in-26:
+
 Ingress Table 26: Network ID
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -3318,6 +3484,8 @@ This table contains flows that set ``flags.network_id`` for IP packets:
   port networks, so ``flags.network_id`` should be set to zero.
 
 - Catch-all: A priority-0 flow with match ``1`` has actions ``next;``.
+
+.. _lr-in-27:
 
 Ingress Table 27: ARP Request
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3360,12 +3528,14 @@ or IPv6 Neighbor Solicitation request.  It holds the following flows:
           output;
       };
 
-  (Ingress table ``IP Routing`` initialized ``reg1`` with the IP address owned
-  by ``outport`` and ``(xx)reg0`` with the next-hop IP address)
+  (Ingress table :ref:`IP Routing <lr-in-16>` initialized ``reg1`` with the IP
+  address owned by ``outport`` and ``(xx)reg0`` with the next-hop IP address)
 
   The IP packet that triggers the ARP/IPv6 NS request is dropped.
 
 - Known MAC address.  A priority-0 flow with match ``1`` has actions ``next;``.
+
+.. _lr-in-28:
 
 Ingress Table 28: ECMP symmetric reply processing for egress
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3377,17 +3547,21 @@ routers, the only type of routers that supports ECMP symmetric reply routes.  As
 the egress port of the traffic needs to be stored in conntrack for these
 sessions, one logical flow is added for each logical router port.
 
+.. _lr-out-0:
+
 Egress Table 0: Check DNAT local
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This table checks if the packet needs to be DNATed in the router ingress table
-``lr_in_dnat`` after it is SNATed  and looped back to the ingress pipeline.
-This check is done only for routers configured with distributed gateway ports
-and NAT entries.  This check is done so that SNAT and DNAT is done in different
-zones instead of a common zone.
+:ref:`DNAT <lr-in-10>` after it is SNATed  and looped back to the ingress
+pipeline. This check is done only for routers configured with distributed
+gateway ports and NAT entries.  This check is done so that SNAT and DNAT is done
+in different zones instead of a common zone.
 
 - A priority-0 logical flow with match ``1`` has actions
   ``REGBIT_DST_NAT_IP_LOCAL = 0; next;``.
+
+.. _lr-out-1:
 
 Egress Table 1: UNDNAT
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -3398,6 +3572,8 @@ pipeline as part of a reply.  This traffic is unDNATed here.
 
 - A priority-0 logical flow with match ``1`` has actions ``next;``.
 
+.. _lr-out-1-undnat-on-gateway-routers:
+
 Egress Table 1: UNDNAT on Gateway Routers
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -3406,6 +3582,8 @@ Egress Table 1: UNDNAT on Gateway Routers
 
 - For all IP packets, a priority-50 flow with an action ``flags.loopback = 1;
   ct_dnat;``.
+
+.. _lr-out-1-undnat-on-distributed-routers:
 
 Egress Table 1: UNDNAT on Distributed Routers
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3438,6 +3616,8 @@ Egress Table 1: UNDNAT on Distributed Routers
   associated with the IP address *A* in the NAT rule.  This allows upstream MAC
   learning to point to the correct chassis.
 
+.. _lr-out-2:
+
 Egress Table 2: Post UNDNAT
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -3446,8 +3626,8 @@ Egress Table 2: Post UNDNAT
   ``lr_out_snat``, to effectively match on various CT states.
 
 - A priority-50 logical flow is added that commits any untracked flows from the
-  previous table ``lr_out_undnat`` for Gateway routers.  This flow matches on
-  ``ct.new && ip`` with action ``ct_commit { } ; next;``.
+  previous table :ref:`UNDNAT <lr-out-1>` for Gateway routers.  This flow
+  matches on ``ct.new && ip`` with action ``ct_commit { } ; next;``.
 
 - If the ``options:ct-commit-all`` is set to ``true`` the following flows are
   configured matching on ``ip && (!ct.trk || !ct.rpl) &&
@@ -3456,6 +3636,8 @@ Egress Table 2: Post UNDNAT
   there is configured DGP ``outport == DGP && is_chassis_resident(CHASSIS)``.
 
 - A priority-0 logical flow with match ``1`` has actions ``next;``.
+
+.. _lr-out-3:
 
 Egress Table 3: SNAT
 ~~~~~~~~~~~~~~~~~~~~~
@@ -3521,7 +3703,7 @@ based on the configuration in the OVN Northbound database.
   source IP address of a packet that belongs to network *A* to *B*, match *M*
   and priority *P*, a flow matches ``ip && ip4.src == A && (!ct.trk || !ct.rpl)
   && (M)`` with an action ``ct_snat(B);``.  The priority of the flow is
-  calculated based as ``300 + P``.  If the NAT rule is of type dnat_and_snat and
+  calculated based as ``300 + P``. If the NAT rule is of type dnat_and_snat and
   has ``stateless=true`` in the options, then the action would be
   ``ip4/6.src=(B)``.
 
@@ -3556,7 +3738,7 @@ based on the configuration in the OVN Northbound database.
 
   - The first flow is added with the calculated priority *P* and match ``ip &&
     ip4.src == A && outport == GW``, where *GW* is the logical router gateway
-    port, with an action ``ct_snat(B);`` to SNATed in the common zone.  If the
+    port, with an action ``ct_snat(B);`` to SNATed in the common zone. If the
     NAT rule is of type dnat_and_snat and has ``stateless=true`` in the options,
     then the action would be ``ip4/6.src=(B)``.
 
@@ -3591,6 +3773,8 @@ based on the configuration in the OVN Northbound database.
 
 - A priority-0 logical flow with match ``1`` has actions ``next;``.
 
+.. _lr-out-4:
+
 Egress Table 4: Post SNAT
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -3600,11 +3784,13 @@ Packets reaching this table are processed according to the flows below:
   routers, and was initiated from an external network (i.e. it matches
   ``ct.new``), is committed to the SNAT CT zone. This ensures that replies
   returning from the SNATed network do not have their source address translated.
-  For details about match rules and priority see section "Egress Table 3: SNAT
-  on Distributed Routers".
+  For details about match rules and priority see section :ref:`SNAT on
+  Distributed Routers <lr-out-3>`.
 
 - A priority-0 logical flow that matches all packets not already handled (match
   ``1``) and action ``next;``.
+
+.. _lr-out-5:
 
 Egress Table 5: Egress Loopback
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3650,6 +3836,8 @@ This table has the following flows:
 
 - A priority-0 logical flow with match ``1`` has actions ``next;``.
 
+.. _lr-out-6:
+
 Egress Table 6: Delivery
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -3664,6 +3852,8 @@ Packets that reach this table are ready for delivery.  It contains:
 
 - A priority-0 logical flow that matches all packets not already handled (match
   ``1``) and drops them (action ``drop;``).
+
+.. _drop-sampling:
 
 Drop sampling
 -------------
