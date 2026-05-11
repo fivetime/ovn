@@ -113,7 +113,7 @@ endif
 # rules.
 
 # rST formatted manpages under Documentation/ref.
-RST_MANPAGES =
+RST_MANPAGES = ovn-logical-flows.7.rst
 
 # rST formatted manpages that we don't want to install because they
 # document stuff that only works with a build tree, not with an
