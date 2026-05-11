@@ -538,6 +538,7 @@ fi
 %{_bindir}/ovn-northd
 %{_bindir}/ovn-ic
 %{_mandir}/man8/ovn-northd.8*
+%{_mandir}/man7/ovn-logical-flows.7*
 %config %{_datadir}/ovn/ovn-nb.ovsschema
 %config %{_datadir}/ovn/ovn-sb.ovsschema
 %config %{_datadir}/ovn/ovn-ic-nb.ovsschema
