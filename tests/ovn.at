@@ -2458,6 +2458,7 @@ AT_CLEANUP
 AT_SETUP([Sparse array operations])
 check ovstest test-sparse-array add
 check ovstest test-sparse-array remove-replace
+check ovstest test-sparse-array bitmap-or
 AT_CLEANUP
 
 AT_SETUP([SPSC ring buffer])
@@ -37007,10 +37008,10 @@ port_key_1=$(printf "0x%x" $(as hv1 fetch_column port_binding tunnel_key logical
 dp_key_2=$(printf "0x%x" $(as hv1 fetch_column datapath tunnel_key external_ids:name=gw-2))
 port_key_2=$(printf "0x%x" $(as hv1 fetch_column port_binding tunnel_key logical_port=gw-2-public))
 
-table=" table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10,arp_op=2 actions=drop
- table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20,arp_op=2 actions=drop
- table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10,arp_op=2 actions=drop
- table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20,arp_op=2 actions=drop
+table=" table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10 actions=drop
+ table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20 actions=drop
+ table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10 actions=drop
+ table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20 actions=drop
  table=OFTABLE_MAC_CACHE_USE, priority=100,ip,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:10,nw_src=192.168.10.10 actions=drop
  table=OFTABLE_MAC_CACHE_USE, priority=100,ip,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:20,nw_src=192.168.10.20 actions=drop
  table=OFTABLE_MAC_CACHE_USE, priority=100,ip,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,nw_src=192.168.10.10 actions=drop
@@ -37059,8 +37060,8 @@ OVS_WAIT_UNTIL([
 ])
 
 AT_CHECK_UNQUOTED([as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_MAC_CACHE_USE --no-stats | strip_cookie | sort], [0], [dnl
- table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10,arp_op=2 actions=drop
- table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20,arp_op=2 actions=drop
+ table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10 actions=drop
+ table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20 actions=drop
  table=OFTABLE_MAC_CACHE_USE, priority=100,ip,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,nw_src=192.168.10.10 actions=drop
  table=OFTABLE_MAC_CACHE_USE, priority=100,ip,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:20,nw_src=192.168.10.20 actions=drop
 ])
@@ -37283,22 +37284,29 @@ ovn-appctl -t ovn-controller vlog/set mac_cache:file:dbg pinctrl:file:dbg
 check ovn-nbctl                                                     \
     -- ls-add ls1                                                   \
     -- ls-add ls2                                                   \
+    -- ls-add ls3                                                   \
     -- lr-add lr                                                    \
     -- set logical_router lr options:mac_binding_age_threshold=4    \
     -- lrp-add lr lr-ls1 00:00:00:00:10:00 192.168.10.1/24          \
     -- lrp-add lr lr-ls2 00:00:00:00:20:00 192.168.20.1/24          \
+    -- lrp-add lr lr-ls3 00:00:00:00:30:00 192.168.30.1/24          \
     -- lsp-add-router-port ls1 ls1-lr lr-ls1                        \
     -- lsp-add ls1 vif1                                             \
     -- lsp-set-addresses vif1 "00:00:00:00:10:10 192.168.10.10"     \
     -- lsp-add-router-port ls2 ls2-lr lr-ls2                        \
     -- lsp-add ls2 vif2                                             \
-    -- lsp-set-addresses vif2 "00:00:00:00:20:10 192.168.20.10"
+    -- lsp-set-addresses vif2 "00:00:00:00:20:10 192.168.20.10"     \
+    -- lsp-add-router-port ls3 ls3-lr lr-ls3                        \
+    -- lsp-add ls3 vif3                                             \
+    -- lsp-set-addresses vif3 "00:00:00:00:30:10 192.168.30.10"
 
 check ovs-vsctl                                      \
     -- add-port br-int vif1                          \
     -- set interface vif1 external-ids:iface-id=vif1 \
     -- add-port br-int vif2                          \
-    -- set interface vif2 external-ids:iface-id=vif2
+    -- set interface vif2 external-ids:iface-id=vif2 \
+    -- add-port br-int vif3                          \
+    -- set interface vif3 external-ids:iface-id=vif3
 
 OVN_POPULATE_ARP
 wait_for_ports_up
@@ -37315,23 +37323,32 @@ sleep 2
 send_garp hv1 vif1 2 00:00:00:00:10:10 ff:ff:ff:ff:ff:ff 192.168.10.10 192.168.10.10
 wait_row_count mac_binding 1 ip="192.168.10.10" logical_port="lr-ls1"
 
-uuid=$(fetch_column mac_binding _uuid ip="192.168.10.10" logical_port="lr-ls1")
+send_garp hv1 vif3 2 00:00:00:00:30:10 ff:ff:ff:ff:ff:ff 192.168.30.10 192.168.30.10
+wait_row_count mac_binding 1 ip="192.168.30.10" logical_port="lr-ls3"
+
+uuid_ls1=$(fetch_column mac_binding _uuid ip="192.168.10.10" logical_port="lr-ls1")
+uuid_ls3=$(fetch_column mac_binding _uuid ip="192.168.30.10" logical_port="lr-ls3")
 for i in $(seq 12); do
-    # Keep one entry alive by sending traffic that uses it.
+    # Keep two entries alive by sending traffic that uses them.
     send_udp hv1 vif1 00:00:00:00:10:00 00:00:00:00:10:10 192.168.20.10 192.168.10.10
+    send_garp hv1 vif3 1 00:00:00:00:30:10 ff:ff:ff:ff:ff:ff 192.168.30.10 192.168.20.100
     sleep 1
     # The entry must not expire.
     check_row_count mac_binding 1 ip="192.168.10.10" logical_port="lr-ls1"
+    check_row_count mac_binding 1 ip="192.168.30.10" logical_port="lr-ls3"
     as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_MAC_CACHE_USE
 done
 # Check that it's the same entry.
-uuid2=$(fetch_column mac_binding _uuid ip="192.168.10.10" logical_port="lr-ls1")
-check test "$uuid" = "$uuid2"
+uuid2_ls1=$(fetch_column mac_binding _uuid ip="192.168.10.10" logical_port="lr-ls1")
+uuid2_ls3=$(fetch_column mac_binding _uuid ip="192.168.30.10" logical_port="lr-ls3")
+check test "$uuid_ls1" = "$uuid2_ls1"
+check test "$uuid_ls3" = "$uuid2_ls3"
 
 # The other entry must have expired by now.
 check_row_count mac_binding 0 ip="192.168.20.10" logical_port="lr-ls2"
-# Wait for the alive one to expire as well.
+# Wait for the alive ones to expire as well.
 wait_row_count mac_binding 0 ip="192.168.10.10" logical_port="lr-ls1"
+wait_row_count mac_binding 0 ip="192.168.30.10" logical_port="lr-ls3"
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
@@ -37355,11 +37372,12 @@ check ovn-nbctl                                                     \
     -- lrp-add lr lr-ls1 00:00:00:00:10:00 192.168.10.1/24          \
     -- lsp-add-router-port ls1 ls1-lr lr-ls1                        \
     -- lsp-add ls1 vif1                                             \
-    -- lsp-set-addresses vif1 "00:00:00:00:10:10 192.168.10.10"
+    -- lsp-set-addresses vif1 "unknown"
 
 check ovs-vsctl                                      \
     -- add-port br-int vif1                          \
-    -- set interface vif1 external-ids:iface-id=vif1
+    -- set interface vif1 external-ids:iface-id=vif1 \
+    options:tx_pcap=hv1/vif1-tx.pcap options:rxq_pcap=hv1/vif1-rx.pcap
 
 OVN_POPULATE_ARP
 wait_for_ports_up
@@ -37391,6 +37409,10 @@ check test "$now" = "$new_ts"
 dnl After waiting until the age threshold the entry should be deleted
 sleep 3
 check_row_count mac_binding 0 ip="192.168.10.20"
+
+dnl There shouldn't be any probe packet.
+: > empty
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [empty])
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
@@ -37498,6 +37520,9 @@ send_na hv1 vif2 00:00:00:00:10:1b 00:00:00:00:20:00 fd12::64 fd12::1
 
 check_row_count mac_binding 1 mac=\"00:00:00:00:10:1a\" ip=\"fd11::64\"
 check_row_count mac_binding 1 mac=\"00:00:00:00:10:1b\" ip=\"fd12::64\"
+
+send_udp6 hv1 vif1 00:00:00:00:10:00 00:00:00:00:10:2a fd12::64 fd11::64
+send_udp6 hv1 vif2 00:00:00:00:20:00 00:00:00:00:10:2b fd11::64 fd12::64
 
 ts0=$(fetch_column Mac_Binding timestamp mac=\"00:00:00:00:10:1a\" ip=\"fd11::64\")
 uuid=$(fetch_column Mac_Binding _uuid mac=\"00:00:00:00:10:1a\" ip=\"fd11::64\")
@@ -37677,6 +37702,9 @@ wait_row_count mac_binding 1 ip="10.10.10.100" logical_port="lr-ls1"
 send_na hv1 vif1 00:00:00:00:10:1a 00:00:00:00:10:00 fd11::64 fd11::1
 wait_row_count mac_binding 1 ip=\"fd11::64\" logical_port=\"lr-ls1\"
 
+send_udp hv1 vif1 00:00:00:00:10:00 00:00:00:00:10:2a 10.10.10.100 42.42.42.100
+send_udp6 hv1 vif1 00:00:00:00:10:00 00:00:00:00:10:2a fd11::64 fd12::100
+
 # The first 2 probes are unicast (arp_attempts 0-1); the entry then falls
 # back to broadcast ARP / multicast NS.
 dump_arp 1 00:00:00:00:10:00 ff:ff:ff:ff:ff:ff 10.10.10.1 10.10.10.100 00:00:00:00:00:00 > expected_bcast
@@ -37795,6 +37823,7 @@ send_garp hv1 snoopvif 1 $ext_mac "ff:ff:ff:ff:ff:ff" $ext_ip $ext_ip
 
 # Wait for mac binding to be created
 wait_row_count mac_binding 1 ip="$ext_ip" logical_port="lr-ls"
+send_udp hv1 snoopvif $lrp_mac 00:00:00:00:00:1e $ext_ip 192.168.1.30
 
 # Wait for mac binding to be removed
 wait_row_count mac_binding 0 ip="$ext_ip" logical_port="lr-ls"
@@ -37819,7 +37848,7 @@ AT_SETUP([MAC binding aging - probing GW router Dynamic Neigh])
 CHECK_SCAPY
 ovn_start
 
-send_imcp_echo_req() {
+send_icmp_echo_req() {
     local hv=$1 dev=$2 hdst=$3 hsrc=$4 idst=$5 isrc=$6
     local packet=$(fmt_pkt "Ether(dst='${hdst}', src='${hsrc}')/ \
                             IP(dst='${idst}', src='${isrc}')/ICMP()")
@@ -37886,7 +37915,7 @@ send_garp hv1 public 2 00:00:00:00:10:1a ff:ff:ff:ff:ff:ff 192.168.10.100 192.16
 wait_row_count mac_binding 1 ip="192.168.10.100" logical_port="gw-public"
 
 # Send ICMP echo request to create entries in OFTABLE_MAC_BINDING.
-send_imcp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
+send_icmp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
 dump_icmp 00:00:00:00:10:1a 00:00:00:00:10:00 192.168.10.100 192.168.20.2 253 0 0 > expected
 OVN_CHECK_PACKETS_CONTAIN([hv1/public-tx.pcap], [expected])
 
@@ -37899,16 +37928,18 @@ OVS_WAIT_UNTIL([$(ovs-ofctl dump-flows br-int table=OFTABLE_MAC_BINDING | \
                   sed 's/reg15=0x.,metadata=0x./reg15=<cleared>,metadata=<cleared>/g' | \
                   grep -q "reg0=0xc0a81402,reg15=<cleared>,metadata=<cleared> actions=mod_dl_dst:00:00:00:00:30:00")])
 
+send_icmp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
+
 # Wait until ovn-controller sends the ARP request.
 OVS_WAIT_UNTIL([test $(grep -c "Sending ARP/ND.*ip: 192.168.20.2" hv1/ovn-controller.log) -eq 1])
-send_imcp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
+send_icmp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
 
 # Now drop ICMP echo reply in order to force OVN to arp the mac binding entry
 # for the distributed router lr.
 check ovn-nbctl --wait=hv acl-add join from-lport 1000 'inport == "join-lr" && icmp' drop
 
 sleep $((aging_th / 2))
-send_imcp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
+send_icmp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
 OVS_WAIT_UNTIL([test $(grep -c "Sending ARP/ND.*ip: 192.168.20.2" hv1/ovn-controller.log) -eq 2])
 
 check ovn-nbctl --wait=hv acl-del join
@@ -37917,6 +37948,8 @@ wait_row_count mac_binding 0 ip="192.168.20.2" logical_port="gw-join"
 
 send_icmp6_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:50:01 fd12::2 fd11::64
 wait_row_count mac_binding 1 mac=\"00:00:00:00:30:00\" ip=\"fd12::2\"
+
+send_icmp6_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:50:01 fd12::2 fd11::64
 
 # Wait until ovn-controller sends the NS request.
 OVS_WAIT_UNTIL([test $(grep -c "Sending ARP/ND.*ip: fd12::2" hv1/ovn-controller.log) -eq 1])
