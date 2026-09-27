@@ -90,7 +90,7 @@
       When using daemon mode, an alternative to the <env>OVN_SB_DAEMON</env>
       environment variable is to specify a path for the Unix socket. When
       starting the ovn-sbctl daemon, specify the <code>-u</code> option with a
-      full path to the location of the socket file. Here is an exmple:
+      full path to the location of the socket file. Here is an example:
     </p>
 
     <pre fixed="yes">
@@ -104,6 +104,19 @@
 
     <pre fixed="yes">
       ovn-sbctl -u /tmp/mysock.ctl show
+    </pre>
+
+    <p>
+      When running in daemon mode, <code>ovn-sbctl</code> uses the
+      <code>sbctl_probe_interval</code> value from the
+      <ref table="SB_Global" column="options"/> column in the
+      <ref table="SB_Global"/> table to configure the inactivity probe interval
+      (in milliseconds) for the database connection.  The default is 120000 ms
+      (120 seconds). To override, set the value with:
+    </p>
+
+    <pre fixed="yes">
+      ovn-sbctl set SB_Global . options:sbctl_probe_interval=60000
     </pre>
 
     <h3>Daemon Commands</h3>
@@ -125,7 +138,7 @@
         commands described above and reply with the results of running these
         commands. Accepts the <code>--timeout</code>, <code>--dry-run</code>,
         <code>--oneline</code>, and the options described under
-        <code>Table Formatting Options</code> in addition to the the
+        <code>Table Formatting Options</code> in addition to the
         command-specific options.
       </dd>
 
@@ -188,7 +201,7 @@
         clients of a clustered database can distribute evenly to all members
         of the cluster.  With <code>--no-shuffle-remotes</code>,
         <code>ovn-sbctl</code> will use the original order specified in the
-        connection string to connect.  This allows user to specify the
+        connection string to connect.  This allows a user to specify the
         preferred order, which is particularly useful for testing.
       </dd>
 
@@ -210,12 +223,12 @@
       <dd>
         Modifies the output format so that the output for each command is
         printed on a single line.  New-line characters that would otherwise
-        separate lines are printed as \fB\\n\fR, and any instances of \fB\\\fR
-        that would otherwise appear in the output are doubled.  Prints a blank
-        line for each command that has no output.  This option does not affect
-        the formatting of output from the <code>list</code> or
-        <code>find</code> commands; see <code>Table Formatting Options</code>
-        below.
+        separate lines are printed as <code>\n</code>, and any instances of
+        <code>\</code> that would otherwise appear in the output are doubled.
+        Prints a blank line for each command that has no output.
+        This option does not affect the formatting of output from the
+        <code>list</code> or <code>find</code> commands; see
+        <code>Table Formatting Options</code> below.
       </dd>
 
       <dt><code>--dry-run</code></dt>
@@ -238,12 +251,14 @@
     <h2>Daemon Options</h2>
     <xi:include href="lib/daemon.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
 
-    <h2>Logging options</h2>
+    <h2>Logging Options</h2>
     <xi:include href="lib/vlog.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
 
     <h2>Table Formatting Options</h2>
-    These options control the format of output from the <code>list</code> and
-    <code>find</code> commands.
+    <p>
+      These options control the format of output from the <code>list</code>
+      and <code>find</code> commands.
+    </p>
     <xi:include href="lib/table.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
 
     <h2>PKI Options</h2>
@@ -289,8 +304,8 @@
         the rules. Each <var>filter-rule</var> has the form
         <var>table-name</var>(<var>filter</var>[|<var>filter</var>]...).
         If <var>table-name</var> is omitted, filtering is applied to
-        the <code>Chassis</code> table by default. A row is shown only if its
-        printed representation (including all referenced rows) contains at
+        the <ref table="Chassis" /> table by default. A row is shown only if
+        its printed representation (including all referenced rows) contains at
         least one of the specified <var>filter</var> substrings.
       </dd>
     </dl>
@@ -319,17 +334,17 @@
         </p>
       </dd>
 
-      <dt>[<code>--if-exists</code>] <var>chassis-del <var>chassis</var></var></dt>
+      <dt>[<code>--if-exists</code>] <code>chassis-del <var>chassis</var></code></dt>
       <dd>
         <p>
-          Deletes <var>chassis</var> and its <var>encaps</var> and
-          <var>gateway_ports</var>.
+          Deletes <var>chassis</var>, its <var>encaps</var> and the associated
+          Chassis_Private record (if it exists).
         </p>
 
         <p>
           Without <code>--if-exists</code>, attempting to delete a chassis that
-          does not exist is an error.  With <code>--if-exists</code> attempting
-          to delete a chassis that does not exist has no effect.
+          does not exist is an error.  With <code>--if-exists</code>,
+          attempting to delete a chassis that does not exist has no effect.
         </p>
       </dd>
     </dl>
@@ -352,7 +367,9 @@
           Without <code>--may-exist</code>, attempting to bind a logical port
           that has already been bound is an error.  With
           <code>--may-exist</code>, this command does nothing if
-          <var>logical-port</var> has already been bound to a chassis.
+          <var>logical-port</var> has already been bound to the specified
+          chassis.  It is still an error if the port is bound to a different
+          chassis.
         </p>
       </dd>
 
@@ -365,7 +382,7 @@
         <p>
           Without <code>--if-exists</code>, attempting to unbind a logical port
           that is not bound is an error.  With <code>--if-exists</code>,
-          attempting to unbind logical port that is not bound has no effect.
+          attempting to unbind a logical port that is not bound has no effect.
         </p>
       </dd>
     </dl>
@@ -423,26 +440,51 @@
           records directly used for generating OpenFlow flows are also
           listed. This includes: <var>port-bindings</var>,
           <var>mac-bindings</var>, <var>multicast-groups</var>,
-          <var>chassis</var>.  The <code>--ovs</code> and <code>--stats</code>
-          can also be used in conjunction with <code>--vflows</code>.
+          <var>chassis</var> and <var>load-balancers</var>.  The
+          <code>--ovs</code> and <code>--stats</code> options can also be used
+          in conjunction with <code>--vflows</code>.
         </p>
       </dd>
 
-      <dt>[<code>--uuid</code>] <code>dump-flows</code> [<var>logical-datapath</var>]</dt>
-      <dd>Alias for <code>lflow-list</code>.</dd>
+      <dt><code>dump-flows</code></dt>
+      <dd>Alias for <ref section="lflow-list"/> and accepts all the same options.</dd>
 
       <dt><code>count-flows</code> [<var>logical-datapath</var>]</dt>
-      <dd>prints numbers of logical flows per table and per datapath.</dd>
+      <dd>Prints the number of logical flows per table and per datapath.</dd>
+    </dl>
+
+    <h2>IP Multicast Commands</h2>
+
+    <dl>
+      <dt><code>ip-multicast-flush</code> [<var>switch</var>]</dt>
+      <dd>
+        <p>
+          Flushes the learned IP multicast groups for the logical switch
+          identified by <var>switch</var>, which may be given as a UUID or
+          as a datapath name.  If <var>switch</var> is not specified, flushes
+          learned multicast groups for all logical switches.
+        </p>
+
+        <p>
+          This works by incrementing the
+          <ref table="IP_Multicast" column="seq_no"/> column of
+          the <ref table="IP_Multicast"/> record for the datapath.
+          <code>ovn-controller</code> monitors this value and flushes
+          its locally learned multicast groups when it detects a change.
+        </p>
+      </dd>
     </dl>
 
     <h2>Remote Connectivity Commands</h2>
 
     <p>
-      These commands manipulate the <code>connections</code> column in the
-      <code>SB_Global</code> table and rows in the <code>Connection</code>
+      These commands manipulate the
+      <ref table="SB_Global" column="connections"/> column in the
+      <ref table="SB_Global"/> table and rows in the <ref table="Connection"/>
       table.  When <code>ovsdb-server</code> is configured to use the
-      <code>connections</code> column for OVSDB connections, this allows the
-      administrator to use \fBovn\-sbctl\fR to configure database connections.
+      <ref table="SB_Global" column="connections"/> column for OVSDB
+      connections, this allows the administrator to use <code>ovn-sbctl</code>
+      to configure database connections.
     </p>
 
     <dl>
@@ -458,10 +500,41 @@
 
       <dt>[<code>--inactivity-probe=</code><var>msecs</var>] <code>set-connection</code> <var>target</var>...</dt>
       <dd>
-        Sets the configured manager target or targets.  Use
-        <code>--inactivity-probe=</code><var>msecs</var> to override the
-        default idle connection inactivity probe time.  Use 0 to disable
-        inactivity probes.
+        <p>
+          Sets the configured connection target or targets.  Use
+          <code>--inactivity-probe=</code><var>msecs</var> to override the
+          default idle connection inactivity probe time.  Use 0 to disable
+          inactivity probes.
+        </p>
+
+        <p>
+          Each <var>target</var> may be preceded by zero or more of the
+          following modifiers, which apply to all subsequent targets until
+          changed:
+        </p>
+
+        <dl>
+          <dt><code>read-only</code></dt>
+          <dd>
+            Sets the <ref table="Connection" column="read_only"/> column for
+            subsequent connections to <code>true</code>, restricting them to
+            read-only transactions.
+          </dd>
+
+          <dt><code>read-write</code></dt>
+          <dd>
+            Sets the <ref table="Connection" column="read_only"/> column for
+            subsequent connections to <code>false</code>, allowing them to
+            modify the database. This is the default.
+          </dd>
+
+          <dt><code>role=</code><var>name</var></dt>
+          <dd>
+            Sets the <ref table="Connection" column="role"/> column for
+            subsequent connections to <var>name</var>.  The default is the
+            empty string.
+          </dd>
+        </dl>
       </dd>
     </dl>
 
@@ -550,7 +623,7 @@
       columns are not case-sensitive, and <code>-</code> and <code>_</code> are
       treated interchangeably.  Unique abbreviations of table and column names
       are acceptable, e.g. <code>d</code> or <code>dhcp</code> is sufficient
-      to identify the <code>DHCP_Options</code> table.
+      to identify the <ref table="DHCP_Options"/> table.
     </p>
 
     <xi:include href="lib/db-ctl-base.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>

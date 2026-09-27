@@ -14,7 +14,7 @@
     originates at a logical port, what will happen to it and where will it
     ultimately end up?  Users already familiar with the Open vSwitch
     <code>ofproto/trace</code> command described in
-    <code>ovs-vswitch</code>(8) will find <code>ovn-trace</code> to be a
+    <code>ovs-vswitchd</code>(8) will find <code>ovn-trace</code> to be a
     similar tool for logical networks.
   </p>
 
@@ -150,22 +150,24 @@
     section for a packet traversing the ingress pipeline of logical datapath
     <code>ls1</code> with ingress logical port <code>lp111</code>.  The
     packet matches a logical flow in table 0 (aka
-    <code>ls_in_port_sec_l2</code>) with priority 50 and executes
-    <code>next(1);</code> to pass to table 1.  Tables 1 through 11 are
-    trivial and omitted.  In table 19 (aka <code>ls_in_l2_lkup</code>), the
+    <code>ls_in_check_port_sec</code>) with priority 50, which checks if the
+    packet passes the inport security checks and stores the result to reg0[15]
+    and executes <code>next;</code> to pass to table 1.  Tables 1 through 32
+    are trivial and omitted.  In table 33 (aka <code>ls_in_l2_lkup</code>), the
     packet matches a flow with priority 50 based on its Ethernet destination
     address and the flow's actions output the packet to the
-    <code>lrp11-attachement</code> logical port.
+    <code>lrp11-attachment</code> logical port.
   </p>
 
   <pre fixed="yes">
     ingress(dp="ls1", inport="lp111")
     ---------------------------------
-    0. ls_in_port_sec_l2: inport == "lp111", priority 50
-    next(1);
-    19. ls_in_l2_lkup: eth.dst == 00:00:00:00:ff:11, priority 50
-    outport = "lrp11-attachment";
-    output;
+     0. ls_in_check_port_sec (northd.c:10650): 1, priority 50, uuid 5e3c7151
+        reg0[15] = check_in_port_sec();
+        next;
+     33. ls_in_l2_lkup (northd.c:11754): eth.dst == 00:00:00:00:ff:11, priority 50, uuid 33a37615
+         outport = "lrp11-attachment";
+         output;
   </pre>
 
   <h2>Summary Output</h2>
@@ -181,9 +183,11 @@
 
   <pre fixed="yes">
     ingress(dp="ls1", inport="lp111") {
-    outport = "lrp11-attachment";
-    output;
-    ...
+        reg0[15] = check_in_port_sec();
+        next;
+        outport = "lp11-attachment";
+        output;
+        ...
     };
   </pre>
 
@@ -195,7 +199,7 @@
     <code>output</code> actions that actually deliver a packet to a logical
     port (excluding patch ports).  The operands of actions that modify packet
     data are displayed reduced to constants, e.g. <code>ip4.dst =
-    reg0;</code> might be show as <code>ip4.dst = 192.168.0.1;</code> if that
+    reg0;</code> might be shown as <code>ip4.dst = 192.168.0.1;</code> if that
     was the value actually loaded.  This yields output even simpler than the
     summary format.  (Users familiar with Open vSwitch may recognize this as
     similar in spirit to the datapath actions listed at the bottom of
@@ -227,36 +231,46 @@
     </dd>
 
     <dt><code>ct_dnat</code> (without an argument)</dt>
+    <dt><code>ct_dnat_in_czone</code> (without an argument)</dt>
     <dd>
       Forks the pipeline.  In one fork, advances to the next table as if
       <code>next;</code> were executed.  The packet is not changed, on the
       assumption that no NAT state was available.  In the other fork, the
-      pipeline continues without change after the <code>ct_dnat</code> action.
+      pipeline continues without change after the <code>ct_dnat</code> (or
+      <code>ct_dnat_in_czone</code>) action.
     </dd>
 
     <dt><code>ct_snat</code> (without an argument)</dt>
+    <dt><code>ct_snat_in_czone</code> (without an argument)</dt>
     <dd>
       This action distinguishes between gateway routers and distributed
       routers.  A gateway router is defined as a logical datapath that contains
       an <code>l3gateway</code> port; any other logical datapath is a
       distributed router.  On a gateway router, <code>ct_snat;</code> is
       treated as a no-op.  On a distributed router, it is treated the same way
-      as <code>ct_dnat;</code>.
+      as <code>ct_dnat;</code>.  <code>ct_snat_in_czone;</code> is handled the
+      same way as <code>ct_snat;</code>.
     </dd>
 
     <dt><code>ct_dnat(<var>ip</var>)</code></dt>
     <dt><code>ct_snat(<var>ip</var>)</code></dt>
+    <dt><code>ct_dnat_in_czone(<var>ip</var>)</code></dt>
+    <dt><code>ct_snat_in_czone(<var>ip</var>)</code></dt>
     <dd>
       Forks the pipeline.  In one fork, sets <code>ip4.dst</code> (or
       <code>ip4.src</code>) to <var>ip</var> and <code>ct.dnat</code> (or
       <code>ct.snat</code>) to 1 and advances to the next table as if
       <code>next;</code> were executed.  In the other fork, the pipeline
       continues without change after the <code>ct_dnat</code> (or
-      <code>ct_snat</code>) action.
+      <code>ct_snat</code>) action.  The <code>ct_dnat_in_czone</code> and
+      <code>ct_snat_in_czone</code> actions are handled the same way as
+      <code>ct_dnat</code> and <code>ct_snat</code>.
     </dd>
 
     <dt><code>ct_lb_mark;</code></dt>
     <dt><code>ct_lb_mark(<var>ip</var></code>[<code>:<var>port</var></code>]...<code>);</code></dt>
+    <dt><code>ct_lb_mark_local;</code></dt>
+    <dt><code>ct_lb_mark_local(<var>ip</var></code>[<code>:<var>port</var></code>]...<code>);</code></dt>
     <dd>
       Forks the pipeline. In one fork, sets <code>ip4.dst</code> (or
       <code>ip6.dst</code>) to one of the load-balancer addresses and the
@@ -265,7 +279,8 @@
       to the address specified on <code>--lb-dst</code>, if any; without
       arguments, uses the address and port specified on <code>--lb-dst</code>.
       In the other fork, the pipeline continues without change after the
-      <code>ct_lb_mark</code> action.
+      <code>ct_lb_mark</code> action.  <code>ct_lb_mark_local</code> is handled
+      the same way as <code>ct_lb_mark</code>.
     </dd>
 
     <dt><code>ct_commit</code></dt>
@@ -273,6 +288,39 @@
     <dt><code>put_nd</code></dt>
     <dd>
       These actions are treated as no-ops.
+    </dd>
+
+    <dt><code>ct_commit_to_zone</code></dt>
+    <dt><code>ct_commit_nat</code></dt>
+    <dd>
+      Forks the pipeline into the next table as if <code>next;</code> were
+      executed, treating the flow as tracked.  The packet is not changed, on
+      the assumption that no NAT state was available.  In the other fork, the
+      pipeline continues without change after the action.
+    </dd>
+
+    <dt><code>ct_clear</code></dt>
+    <dd>
+      Clears the connection tracking state of the traced packet, so that
+      later actions that depend on connection tracking (such as
+      <code>ct_next</code>) see an untracked flow.
+    </dd>
+
+    <dt><code>select</code></dt>
+    <dd>
+      Selects one of the destinations listed in the action.  By default, one
+      is chosen at random; use the <code>--select-id</code> option to select
+      a specific one.  <code>ovn-trace</code> forks the pipeline into the next
+      table, with the selected id written to the action's result field.
+    </dd>
+
+    <dt><code>ct_snat_to_vip</code></dt>
+    <dd>
+      Looks up the load-balancer virtual IP addresses in the southbound
+      database.  If the packet's connection-tracked destination IP matches a
+      virtual IP address, <code>ovn-trace</code> notes that the source address
+      is translated to that virtual IP address; otherwise the packet is not
+      changed.
     </dd>
   </dl>
 
@@ -284,10 +332,6 @@
     daemon and accepts commands from <code>ovn-appctl</code> (or another
     JSON-RPC client) indefinitely.  The currently supported commands are
     described below.
-  </p>
-
-  <p>
-    
   </p>
 
   <dl>
@@ -389,7 +433,7 @@
         <li>
           <code>trk</code>: Include to indicate connection tracking has taken
           place.  (This bit is set automatically even if not listed in
-          <var>flags</var>.
+          <var>flags</var>).
         </li>
         <li><code>new</code>: Include to indicate a new flow.</li>
         <li><code>est</code>: Include to indicate an established flow.</li>
@@ -488,6 +532,31 @@
       Otherwise, the default is <code>unix:@RUNDIR@/db.sock</code>, but this
       default is unlikely to be useful outside of single-machine OVN test
       environments.
+    </dd>
+
+    <dt><code>--leader-only</code></dt>
+    <dt><code>--no-leader-only</code></dt>
+    <dd>
+      By default, or with <code>--leader-only</code>, when the database
+      server is a clustered database, <code>ovn-trace</code> reads only
+      from the cluster leader.  This ensures that the data
+      <code>ovn-trace</code> reads is up-to-date.  With
+      <code>--no-leader-only</code>, <code>ovn-trace</code> uses any
+      server in the cluster, which means that it can read stale data.
+      Refer to <code>Understanding Cluster Consistency</code> in
+      <code>ovsdb</code>(7) for more information.
+    </dd>
+
+    <dt><code>--unixctl=</code><var>socket</var></dt>
+    <dd>
+      Sets the name of the control socket on which <code>ovn-trace</code>
+      listens for runtime management commands when run in daemon mode with
+      <code>--detach</code>.  If <var>socket</var> does not begin with
+      <code>/</code>, it is interpreted as relative to
+      <code>@RUNDIR@</code>.  If <code>--unixctl</code> is not specified,
+      the default socket is
+      <code>@RUNDIR@/ovn-trace.</code><var>pid</var><code>.ctl</code>,
+      where <var>pid</var> is <code>ovn-trace</code>'s process ID.
     </dd>
   </dl>
   

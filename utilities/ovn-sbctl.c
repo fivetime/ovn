@@ -98,8 +98,8 @@ Chassis commands:\n\
   chassis-add CHASSIS ENCAP-TYPE ENCAP-IP  create a new chassis named\n\
                                            CHASSIS with ENCAP-TYPE tunnels\n\
                                            and ENCAP-IP\n\
-  chassis-del CHASSIS         delete CHASSIS and all of its encaps\n\
-                              and gateway_ports\n\
+  chassis-del CHASSIS         delete CHASSIS, its encaps, and the associated\n\
+                              Chassis_Private record.\n\
 \n\
 Port binding commands:\n\
   lsp-bind PORT CHASSIS       bind logical port PORT to CHASSIS\n\
@@ -110,11 +110,16 @@ Logical flow commands:\n\
   dump-flows  [DATAPATH] [LFLOW...] alias for lflow-list\n\
   count-flows [DATAPATH]            count logical flows for DATAPATH\n\
 \n\
+IP multicast commands:\n\
+  ip-multicast-flush [SWITCH]     flush learned multicast groups\n\
+\n\
 Connection commands:\n\
   get-connection             print the connections\n\
   del-connection             delete the connections\n\
   [--inactivity-probe=MSECS]\n\
   set-connection TARGET...   set the list of connections to TARGET...\n\
+                               (TARGET may be preceded by read-only,\n\
+                               read-write, or role=NAME)\n\
 \n\
 SSL/TLS commands:\n\
   get-ssl                     print the SSL/TLS configuration\n\

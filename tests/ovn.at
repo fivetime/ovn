@@ -12680,6 +12680,144 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([dns lookup : configurable TTL])
+CHECK_SCAPY
+ovn_start
+
+check ovn-nbctl ls-add ls \
+    -- lsp-add ls lsp \
+    -- lsp-set-addresses lsp "00:00:00:00:00:01 10.0.0.1"
+
+d=$(ovn-nbctl create DNS records={})
+check ovn-nbctl set DNS $d records:foo.ovn.org="10.0.0.42 aef0::42"
+check ovn-nbctl set DNS $d records:42.0.0.10.in-addr.arpa="foo.ovn.org"
+check ovn-nbctl set Logical_switch ls dns_records="$d"
+
+net_add n1
+sim_add hv1
+
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovs-vsctl add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=lsp \
+    options:tx_pcap=hv1/vif1-tx.pcap \
+    options:rxq_pcap=hv1/vif1-rx.pcap
+
+OVN_POPULATE_ARP
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+dns_req_a=$(fmt_pkt "Ether(dst='00:00:00:00:00:02', src='00:00:00:00:00:01') / \
+                    IP(dst='10.0.0.254', src='10.0.0.1') / \
+                    UDP(sport=42424, dport=53) / \
+                    DNS(rd=1, qd=DNSQR(qname='foo.ovn.org', qtype='A'))")
+dns_req_aaaa=$(fmt_pkt "Ether(dst='00:00:00:00:00:02', src='00:00:00:00:00:01') / \
+                       IP(dst='10.0.0.254', src='10.0.0.1') / \
+                       UDP(sport=42424, dport=53) / \
+                       DNS(rd=1, qd=DNSQR(qname='foo.ovn.org', qtype='AAAA'))")
+dns_req_ptr=$(fmt_pkt "Ether(dst='00:00:00:00:00:02', src='00:00:00:00:00:01') / \
+                      IP(dst='10.0.0.254', src='10.0.0.1') / \
+                      UDP(sport=42424, dport=53) / \
+                      DNS(rd=1, qd=DNSQR(qname='42.0.0.10.in-addr.arpa', qtype='PTR'))")
+dns_req_any=$(fmt_pkt "Ether(dst='00:00:00:00:00:02', src='00:00:00:00:00:01') / \
+                       IP(dst='10.0.0.254', src='10.0.0.1') / \
+                       UDP(sport=42424, dport=53) / \
+                       DNS(rd=1, qd=DNSQR(qname='foo.ovn.org', qtype='ALL'))")
+
+# Without "options:ttl", the reply uses the default TTL of 3600.
+dns_reply=$(fmt_pkt "Ether(dst='00:00:00:00:00:01', src='00:00:00:00:00:02') / \
+                     IP(dst='10.0.0.1', src='10.0.0.254') / \
+                     UDP(sport=53, dport=42424, chksum=0) / \
+                     DNS(qr=1, qd=DNSQR(qname='foo.ovn.org', qtype='A'), \
+                         an=DNSRR(rrname='foo.ovn.org', type='A', ttl=3600, \
+                                  rdata='10.0.0.42'))")
+echo ${dns_reply} > expected
+as hv1 reset_pcap_file hv1-vif1 hv1/vif1
+as hv1 ovs-appctl netdev-dummy/receive hv1-vif1 ${dns_req_a}
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/vif1-tx.pcap], [expected])
+
+# options:ttl=30 is applied to the A, AAAA and PTR replies alike.
+check ovn-nbctl --wait=hv set DNS $d options:ttl=30
+
+dns_reply=$(fmt_pkt "Ether(dst='00:00:00:00:00:01', src='00:00:00:00:00:02') / \
+                     IP(dst='10.0.0.1', src='10.0.0.254') / \
+                     UDP(sport=53, dport=42424, chksum=0) / \
+                     DNS(qr=1, qd=DNSQR(qname='foo.ovn.org', qtype='A'), \
+                         an=DNSRR(rrname='foo.ovn.org', type='A', ttl=30, \
+                                  rdata='10.0.0.42'))")
+echo ${dns_reply} > expected
+as hv1 reset_pcap_file hv1-vif1 hv1/vif1
+as hv1 ovs-appctl netdev-dummy/receive hv1-vif1 ${dns_req_a}
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/vif1-tx.pcap], [expected])
+
+dns_reply=$(fmt_pkt "Ether(dst='00:00:00:00:00:01', src='00:00:00:00:00:02') / \
+                     IP(dst='10.0.0.1', src='10.0.0.254') / \
+                     UDP(sport=53, dport=42424, chksum=0) / \
+                     DNS(qr=1, qd=DNSQR(qname='foo.ovn.org', qtype='AAAA'), \
+                         an=DNSRR(rrname='foo.ovn.org', type='AAAA', ttl=30, \
+                                  rdata='aef0::42'))")
+echo ${dns_reply} > expected
+as hv1 reset_pcap_file hv1-vif1 hv1/vif1
+as hv1 ovs-appctl netdev-dummy/receive hv1-vif1 ${dns_req_aaaa}
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/vif1-tx.pcap], [expected])
+
+dns_reply=$(fmt_pkt "Ether(dst='00:00:00:00:00:01', src='00:00:00:00:00:02') / \
+                     IP(dst='10.0.0.1', src='10.0.0.254') / \
+                     UDP(sport=53, dport=42424, chksum=0) / \
+                     DNS(qr=1, qd=DNSQR(qname='42.0.0.10.in-addr.arpa', qtype='PTR'), \
+                         an=DNSRR(rrname='42.0.0.10.in-addr.arpa', type='PTR', \
+                                  ttl=30, rdata='foo.ovn.org'))")
+echo ${dns_reply} > expected
+as hv1 reset_pcap_file hv1-vif1 hv1/vif1
+as hv1 ovs-appctl netdev-dummy/receive hv1-vif1 ${dns_req_ptr}
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/vif1-tx.pcap], [expected])
+
+# The ANY reply carries the A and AAAA RRs, each with the per-row TTL.
+dns_reply=$(fmt_pkt "Ether(dst='00:00:00:00:00:01', src='00:00:00:00:00:02') / \
+                      IP(dst='10.0.0.1', src='10.0.0.254') / \
+                      UDP(sport=53, dport=42424, chksum=0) / \
+                      DNS(qr=1, qd=DNSQR(qname='foo.ovn.org', qtype='ALL'), \
+                          an=[[DNSRR(rrname='foo.ovn.org', type='A', \
+                                    ttl=30, rdata='10.0.0.42'), \
+                               DNSRR(rrname='foo.ovn.org', type='AAAA', \
+                                    ttl=30, rdata='aef0::42')]])")
+echo ${dns_reply} > expected
+as hv1 reset_pcap_file hv1-vif1 hv1/vif1
+as hv1 ovs-appctl netdev-dummy/receive hv1-vif1 ${dns_req_any}
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/vif1-tx.pcap], [expected])
+
+# Removing the option restores the default TTL of 3600.
+check ovn-nbctl --wait=hv remove DNS $d options ttl
+dns_reply=$(fmt_pkt "Ether(dst='00:00:00:00:00:01', src='00:00:00:00:00:02') / \
+                     IP(dst='10.0.0.1', src='10.0.0.254') / \
+                     UDP(sport=53, dport=42424, chksum=0) / \
+                     DNS(qr=1, qd=DNSQR(qname='foo.ovn.org', qtype='A'), \
+                         an=DNSRR(rrname='foo.ovn.org', type='A', ttl=3600, \
+                                  rdata='10.0.0.42'))")
+echo ${dns_reply} > expected
+as hv1 reset_pcap_file hv1-vif1 hv1/vif1
+as hv1 ovs-appctl netdev-dummy/receive hv1-vif1 ${dns_req_a}
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/vif1-tx.pcap], [expected])
+
+# options:ttl=0 is honored (a reply TTL of 0).
+check ovn-nbctl --wait=hv set DNS $d options:ttl=0
+dns_reply=$(fmt_pkt "Ether(dst='00:00:00:00:00:01', src='00:00:00:00:00:02') / \
+                     IP(dst='10.0.0.1', src='10.0.0.254') / \
+                     UDP(sport=53, dport=42424, chksum=0) / \
+                     DNS(qr=1, qd=DNSQR(qname='foo.ovn.org', qtype='A'), \
+                         an=DNSRR(rrname='foo.ovn.org', type='A', ttl=0, \
+                                  rdata='10.0.0.42'))")
+echo ${dns_reply} > expected
+as hv1 reset_pcap_file hv1-vif1 hv1/vif1
+as hv1 ovs-appctl netdev-dummy/receive hv1-vif1 ${dns_req_a}
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/vif1-tx.pcap], [expected])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([4 HV, 1 LS, 1 LR, packet test with HA distributed router gateway port])
 ovn_start
 
@@ -19555,7 +19693,7 @@ AT_CHECK([ovn-sbctl lflow-list ls1 | grep ls_out_pre_acl | ovn_strip_lflows], [0
 ])
 
 # Check target port deletion.
-check ovn-nbctl lsp-del ls2-lp2
+check ovn-nbctl --wait=sb lsp-del ls2-lp2
 AT_CHECK([ovn-sbctl lflow-list ls1 | grep mirror | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
   table=??(ls_out_mirror      ), priority=0    , match=(1), action=(next;)
@@ -37740,14 +37878,12 @@ dump_arp 1 00:00:00:00:10:00 00:00:00:00:10:1b 10.10.10.1 10.10.10.101 00:00:00:
 dump_ns 00:00:00:00:10:1b 00:00:00:00:10:00 fd11::65 fd11::1 fd11::65 > ucast_v6_65.pkt
 OVS_WAIT_UNTIL([test $($PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap | \
                 grep -Fc "$(cat ucast_v4_101.pkt)") -ge 2])
+v4_ts=$(fetch_column Mac_Binding timestamp ip=10.10.10.101)
+send_garp hv1 vif1 2 00:00:00:00:10:1b 00:00:00:00:10:00 10.10.10.101 10.10.10.1
+
 OVS_WAIT_UNTIL([test $($PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap | \
                 grep -Fc "$(cat ucast_v6_65.pkt)") -ge 2])
-
-# The neighbours answer, refreshing the rows in place (resetting
-# arp_attempts).  Confirm the timestamps advanced.
-v4_ts=$(fetch_column Mac_Binding timestamp ip=10.10.10.101)
 v6_ts=$(fetch_column Mac_Binding timestamp ip=\"fd11::65\")
-send_garp hv1 vif1 2 00:00:00:00:10:1b 00:00:00:00:10:00 10.10.10.101 10.10.10.1
 send_na hv1 vif1 00:00:00:00:10:1b 00:00:00:00:10:00 fd11::65 fd11::1
 OVS_WAIT_UNTIL([test $(fetch_column Mac_Binding timestamp ip=10.10.10.101) -gt $v4_ts])
 OVS_WAIT_UNTIL([test $(fetch_column Mac_Binding timestamp ip=\"fd11::65\") -gt $v6_ts])
@@ -37845,6 +37981,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([MAC binding aging - probing GW router Dynamic Neigh])
+TAG_UNSTABLE
 CHECK_SCAPY
 ovn_start
 
@@ -37869,6 +38006,25 @@ dump_icmp() {
                             ICMP(type=${type}, chksum=${chksum})")
 
     echo $packet
+}
+
+mac_cache_flow_is_stale() {
+    local flow=$1
+    local stats field n_packets idle_age
+
+    stats=$(as hv1 ovs-ofctl dump-flows br-int \
+            "table=OFTABLE_MAC_CACHE_USE,$flow" | grep 'n_packets=')
+    n_packets=
+    idle_age=
+    for field in $stats; do
+        field=${field%,}
+        case $field in
+            n_packets=*) n_packets=${field#n_packets=} ;;
+            idle_age=*) idle_age=${field#idle_age=} ;;
+        esac
+    done
+
+    test "$n_packets" -gt 0 && test "$idle_age" -ge "$aging_th"
 }
 
 aging_th=5
@@ -37930,17 +38086,15 @@ OVS_WAIT_UNTIL([$(ovs-ofctl dump-flows br-int table=OFTABLE_MAC_BINDING | \
 
 send_icmp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
 
-# Wait until ovn-controller sends the ARP request.
-OVS_WAIT_UNTIL([test $(grep -c "Sending ARP/ND.*ip: 192.168.20.2" hv1/ovn-controller.log) -eq 1])
-send_icmp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
-
 # Now drop ICMP echo reply in order to force OVN to arp the mac binding entry
 # for the distributed router lr.
 check ovn-nbctl --wait=hv acl-add join from-lport 1000 'inport == "join-lr" && icmp' drop
 
-sleep $((aging_th / 2))
+OVS_WAIT_UNTIL([mac_cache_flow_is_stale 'ip,nw_src=192.168.20.2'])
+
+probe_count=$(grep -c "Sending ARP/ND.*ip: 192.168.20.2" hv1/ovn-controller.log)
 send_icmp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
-OVS_WAIT_UNTIL([test $(grep -c "Sending ARP/ND.*ip: 192.168.20.2" hv1/ovn-controller.log) -eq 2])
+OVS_WAIT_UNTIL([test "$(grep -c "Sending ARP/ND.*ip: 192.168.20.2" hv1/ovn-controller.log)" -gt "$probe_count"])
 
 check ovn-nbctl --wait=hv acl-del join
 wait_row_count mac_binding 0 ip="192.168.10.100" logical_port="gw-public"
@@ -37951,17 +38105,15 @@ wait_row_count mac_binding 1 mac=\"00:00:00:00:30:00\" ip=\"fd12::2\"
 
 send_icmp6_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:50:01 fd12::2 fd11::64
 
-# Wait until ovn-controller sends the NS request.
-OVS_WAIT_UNTIL([test $(grep -c "Sending ARP/ND.*ip: fd12::2" hv1/ovn-controller.log) -eq 1])
-send_icmp6_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:50:01 fd12::2 fd11::64
-
 # Now drop ICMPv6 echo reply in order to force OVN to send NS for the lr mac binding entry.
 check ovn-nbctl --wait=hv acl-add join from-lport 1010 'inport == "join-lr" && ip6 && icmp6.type == 0x87' allow
 check ovn-nbctl --wait=hv acl-add join from-lport 1000 'inport == "join-lr" && icmp' drop
 
-sleep $((aging_th / 2))
+OVS_WAIT_UNTIL([mac_cache_flow_is_stale 'ipv6,ipv6_src=fd12::2'])
+
+probe_count=$(grep -c "Sending ARP/ND.*ip: fd12::2" hv1/ovn-controller.log)
 send_icmp6_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:50:01 fd12::2 fd11::64
-OVS_WAIT_UNTIL([test $(grep -c "Sending ARP/ND.*ip: fd12::2" hv1/ovn-controller.log) -eq 2])
+OVS_WAIT_UNTIL([test "$(grep -c "Sending ARP/ND.*ip: fd12::2" hv1/ovn-controller.log)" -gt "$probe_count"])
 
 wait_row_count mac_binding 0 ip=\"fd12::2\" logical_port="gw-join"
 
@@ -40092,8 +40244,9 @@ check ovn-nbctl lrp-set-gateway-chassis lr0-public hv2 20
 check ovn-nbctl lr-nat-add lr0 snat 172.168.0.1 10.0.0.0/24
 check ovn-nbctl lr-nat-add lr0 dnat_and_snat 172.168.0.110 10.0.0.2 sw0-port1 f0:00:00:01:02:03
 
-wait_for_ports_up
 OVN_POPULATE_ARP
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
 
 # send UDP request to the FIP associated to sw0-port1
 test_ip_req_packet "f0:00:00:01:02:03" "172.168.0.110"
@@ -40108,7 +40261,7 @@ echo $fip_packet > expected
 OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv2/vif1-tx.pcap], [expected])
 
 check ovn-nbctl lb-add lb0 172.168.0.1:4369 10.0.0.2:4369 udp
-check ovn-nbctl lr-lb-add lr0 lb0
+check ovn-nbctl --wait=hv lr-lb-add lr0 lb0
 
 # send UDP request to the load-balancer VIP
 test_ip_req_packet "00:00:20:20:12:13" "172.168.0.1"

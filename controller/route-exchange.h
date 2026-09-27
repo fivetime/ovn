@@ -18,7 +18,53 @@
 #ifndef ROUTE_EXCHANGE_H
 #define ROUTE_EXCHANGE_H 1
 
+#include <net/if.h>
+#include <netinet/in.h>
+#include <stdint.h>
+
 #include "openvswitch/hmap.h"
+#include "util.h"
+
+/* One of the next hops of a route as reported by the kernel. */
+struct ovn_route_nexthop {
+    struct in6_addr addr;
+    /* Adding 1 to this to be sure we actually have a terminating '\0' */
+    char ifname[IFNAMSIZ + 1];
+};
+
+/* A digested version of a route message sent down by the kernel to indicate
+ * that a route has changed.  Unlike 'struct route_data', which points into
+ * itself to describe the next hops, this is self contained, so it stays valid
+ * after the message it was built from is gone. */
+struct ovn_route_msg {
+    /* E.g. RTM_NEWROUTE, RTM_DELROUTE. */
+    uint16_t nlmsg_type;
+    /* Routing table the route belongs to. */
+    uint32_t table_id;
+    /* Prefix the route is for. */
+    struct in6_addr prefix;
+    unsigned int plen;
+    /* Routing protocol that installed the route, e.g. RTPROT_BGP. */
+    unsigned char protocol;
+    /* Metric of the route.  The kernel allows several routes for one prefix
+     * that differ only by this, so it is part of a route's identity. */
+    uint32_t priority;
+    /* Number of next hops described by the route itself. */
+    size_t n_nexthops;
+    struct ovn_route_nexthop nexthops[];
+};
+
+static inline size_t
+ovn_route_msg_size(const struct ovn_route_msg *msg)
+{
+    return sizeof *msg + msg->n_nexthops * sizeof msg->nexthops[0];
+}
+
+static inline struct ovn_route_msg *
+ovn_route_msg_clone(const struct ovn_route_msg *msg)
+{
+    return xmemdup(msg, ovn_route_msg_size(msg));
+}
 
 struct route_exchange_ctx_in {
     struct ovsdb_idl_txn *ovnsb_idl_txn;
@@ -35,8 +81,33 @@ struct route_exchange_ctx_out {
     bool sb_changes_pending;
 };
 
-void route_exchange_run(const struct route_exchange_ctx_in *,
+/* What route_exchange knows about the kernel routing tables it syncs, kept
+ * between runs so that a change to one of them can be applied without reading
+ * them all again. */
+struct route_exchange_state;
+
+struct route_exchange_state *route_exchange_state_create(void);
+void route_exchange_state_destroy(struct route_exchange_state *);
+
+void route_exchange_run(struct route_exchange_state *,
+                        const struct route_exchange_ctx_in *,
                         struct route_exchange_ctx_out *);
+
+enum route_exchange_handled {
+    /* The change cannot be applied to what the last route_exchange_run() left
+     * behind, so it has to run again. */
+    ROUTE_EXCHANGE_UNHANDLED,
+    /* The change does not affect the routes OVN learned. */
+    ROUTE_EXCHANGE_UNCHANGED,
+    ROUTE_EXCHANGE_UPDATED,
+};
+
+/* Updates the routes OVN learned after the kernel reported the route changes
+ * in 'changed_routes' ('struct ovn_route_msg *'). */
+enum route_exchange_handled route_exchange_handle_route_changes(
+    struct route_exchange_state *, const struct route_exchange_ctx_in *,
+    struct route_exchange_ctx_out *, const struct vector *changed_routes);
+
 void route_exchange_cleanup_vrfs(void);
 void route_exchange_destroy(void);
 

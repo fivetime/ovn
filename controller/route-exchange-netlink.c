@@ -199,13 +199,183 @@ re_nl_delete_route(uint32_t table_id, const struct advertise_route_entry *re)
     return modify_route(RTM_DELROUTE, 0, table_id, re);
 }
 
+/* Returns a self contained copy of the route 'rd' reported by a message of
+ * type 'nlmsg_type'.  The caller takes ownership of it. */
+struct ovn_route_msg *
+ovn_route_msg_from_route_data(uint16_t nlmsg_type,
+                              const struct route_data *rd)
+{
+    size_t n_nexthops = ovs_list_size(&rd->nexthops);
+    struct ovn_route_msg *msg =
+        xzalloc(sizeof *msg + n_nexthops * sizeof msg->nexthops[0]);
+
+    *msg = (struct ovn_route_msg) {
+        .nlmsg_type = nlmsg_type,
+        .table_id = rd->rta_table_id,
+        .prefix = rd->rta_dst,
+        .plen = rd->rtm_dst_len,
+        .protocol = rd->rtm_protocol,
+        .priority = rd->rta_priority,
+        .n_nexthops = n_nexthops,
+    };
+
+    struct ovn_route_nexthop *nh = msg->nexthops;
+    const struct route_data_nexthop *rdnh;
+    LIST_FOR_EACH (rdnh, nexthop_node, &rd->nexthops) {
+        nh->addr = rdnh->addr;
+        memcpy(nh->ifname, rdnh->ifname, IFNAMSIZ);
+        nh++;
+    }
+
+    return msg;
+}
+
+void
+ovn_route_msg_format(struct ds *ds, const struct ovn_route_msg *msg)
+{
+    ds_put_format(ds, "table_id=%"PRIu32" dst=", msg->table_id);
+    ipv6_format_mapped(&msg->prefix, ds);
+    ds_put_format(ds, " plen=%u proto=%u priority=%"PRIu32,
+                  msg->plen, msg->protocol, msg->priority);
+
+    for (size_t i = 0; i < msg->n_nexthops; i++) {
+        const struct ovn_route_nexthop *nh = &msg->nexthops[i];
+
+        ds_put_cstr(ds, " nexthop=");
+        ipv6_format_mapped(&nh->addr, ds);
+        if (nh->ifname[0]) {
+            ds_put_format(ds, ",dev=%s", nh->ifname);
+        }
+    }
+}
+
+/* Returns true if 'msg' describes a route OVN may learn: one installed into
+ * its table by a dynamic routing protocol, rather than by OVN itself or by a
+ * user.  Protocol values above RTPROT_STATIC are the ones used by the dynamic
+ * routing protocols. */
+static bool
+route_is_learn_relevant(const struct ovn_route_msg *msg)
+{
+    return msg->protocol != RTPROT_OVN
+           && msg->protocol > RTPROT_STATIC
+           && !prefix_is_link_local(&msg->prefix, msg->plen);
+}
+
+/* Two routes for one prefix may differ only by their metric, so it is part of
+ * a route's identity. */
+static uint32_t
+cached_route_hash(const struct ovn_route_msg *msg)
+{
+    uint32_t hash = hash_bytes(&msg->prefix, sizeof msg->prefix, 0);
+
+    hash = hash_int(msg->plen, hash);
+    return hash_int(msg->priority, hash);
+}
+
+static struct re_nl_cached_route *
+cached_route_find(const struct hmap *routes, const struct ovn_route_msg *msg)
+{
+    struct re_nl_cached_route *cr;
+    HMAP_FOR_EACH_WITH_HASH (cr, node, cached_route_hash(msg), routes) {
+        if (cr->msg->plen == msg->plen
+            && cr->msg->priority == msg->priority
+            && ipv6_addr_equals(&cr->msg->prefix, &msg->prefix)) {
+            return cr;
+        }
+    }
+
+    return NULL;
+}
+
+/* Applies the change 'msg' to the routes cached for its table: a route
+ * reported as added replaces the one it has the identity of, a route reported
+ * as removed drops it.  Changes to routes OVN does not learn from are ignored.
+ *
+ * Returns true if 'routes' changed. */
+bool
+re_nl_cached_routes_apply(struct hmap *routes, const struct ovn_route_msg *msg)
+{
+    if (!route_is_learn_relevant(msg)) {
+        return false;
+    }
+
+    struct re_nl_cached_route *cr = cached_route_find(routes, msg);
+
+    if (msg->nlmsg_type == RTM_DELROUTE) {
+        if (!cr) {
+            return false;
+        }
+
+        hmap_remove(routes, &cr->node);
+        free(cr->msg);
+        free(cr);
+        return true;
+    }
+
+    if (cr) {
+        size_t size = ovn_route_msg_size(msg);
+        if (size == ovn_route_msg_size(cr->msg)
+            && !memcmp(cr->msg, msg, size)) {
+            return false;
+        }
+
+        free(cr->msg);
+        cr->msg = ovn_route_msg_clone(msg);
+        return true;
+    }
+
+    cr = xmalloc(sizeof *cr);
+    cr->msg = ovn_route_msg_clone(msg);
+    hmap_insert(routes, &cr->node, cached_route_hash(msg));
+
+    return true;
+}
+
+void
+re_nl_cached_routes_clear(struct hmap *routes)
+{
+    struct re_nl_cached_route *cr;
+    HMAP_FOR_EACH_POP (cr, node, routes) {
+        free(cr->msg);
+        free(cr);
+    }
+}
+
+void
+re_nl_resolve_route(const struct ovn_route_msg *msg,
+                    struct vector *learned_routes)
+{
+    for (size_t i = 0; i < msg->n_nexthops; i++) {
+        const struct ovn_route_nexthop *nh = &msg->nexthops[i];
+
+        if (ipv6_is_zero(&nh->addr)) {
+            /* This is most likely an address on the local link.  As we just
+             * want to learn remote routes we do not need it. */
+            continue;
+        }
+
+        struct re_nl_received_route_node rr;
+        rr = (struct re_nl_received_route_node) {
+            .prefix = msg->prefix,
+            .plen = msg->plen,
+            .nexthop = nh->addr,
+        };
+        ovs_strlcpy(rr.ifname, nh->ifname, sizeof rr.ifname);
+
+        vector_push(learned_routes, &rr);
+    }
+}
+
 struct route_msg_handle_data {
     struct hmapx *routes_to_advertise;
-    struct vector *learned_routes;
     struct vector *stale_routes;
     /* Vector of "const struct hmap *", each holding advertise_route_entry
      * nodes for a datapath sharing this routing table. */
     const struct vector *route_tables;
+
+    /* Routes of the table OVN may learn from (struct re_nl_cached_route),
+     * rebuilt from the dump.  NULL if the caller does not learn routes. */
+    struct hmap *learned_routes;
 };
 
 static void
@@ -224,38 +394,16 @@ handle_route_msg(const struct route_table_msg *msg,
         return;
     }
 
-    /* This route is not from us, learn it only if it's > RTPROT_STATIC,
-     * those protocol values are used by dynamic routing protocols.
-     * This should prevent us from learning static routes installed
-     * by users in the VRF. */
+    /* This route is not from us, so it is one we may learn. */
     if (rd->rtm_protocol != RTPROT_OVN) {
-        if (rd->rtm_protocol <= RTPROT_STATIC) {
-            return;
-        }
         if (!handle_data->learned_routes) {
             return;
         }
-        if (prefix_is_link_local(&rd->rta_dst, rd->rtm_dst_len)) {
-            return;
-        }
-        struct route_data_nexthop *nexthop;
-        LIST_FOR_EACH (nexthop, nexthop_node, &rd->nexthops) {
-            if (ipv6_is_zero(&nexthop->addr)) {
-                /* This is most likely an address on the local link.
-                 * As we just want to learn remote routes we do not need it.*/
-                continue;
-            }
-            struct re_nl_received_route_node rr;
-            rr = (struct re_nl_received_route_node) {
-                .prefix = rd->rta_dst,
-                .plen = rd->rtm_dst_len,
-                .nexthop = nexthop->addr,
-            };
-            memcpy(rr.ifname, nexthop->ifname, IFNAMSIZ);
-            rr.ifname[IFNAMSIZ] = '\0';
 
-            vector_push(handle_data->learned_routes, &rr);
-        }
+        struct ovn_route_msg *route_msg =
+            ovn_route_msg_from_route_data(RTM_NEWROUTE, rd);
+        re_nl_cached_routes_apply(handle_data->learned_routes, route_msg);
+        free(route_msg);
         return;
     }
 
@@ -325,7 +473,7 @@ re_nl_encode_nexthop(struct ofpbuf *request, bool dst_is_ipv4,
 
 int
 re_nl_sync_routes(uint32_t table_id, const struct vector *route_tables,
-                  struct vector *learned_routes)
+                  struct hmap *learned_routes)
 {
     struct hmapx routes_to_advertise = HMAPX_INITIALIZER(&routes_to_advertise);
     struct vector stale_routes =
@@ -355,6 +503,12 @@ re_nl_sync_routes(uint32_t table_id, const struct vector *route_tables,
             }
         }
         n_prev++;
+    }
+
+    if (learned_routes) {
+        /* The dump below tells us about every route of the table, so whatever
+         * we knew about it is replaced. */
+        re_nl_cached_routes_clear(learned_routes);
     }
 
     /* Remove routes from the system that are not in any of the route tables
