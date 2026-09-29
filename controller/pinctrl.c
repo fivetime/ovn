@@ -2964,10 +2964,91 @@ encode_dhcpv6_server_id_opt(struct ofpbuf *opts, void *user_data)
     ofpbuf_put(opts, &server_id, sizeof server_id);
 }
 
+/* Returns the value of option 'code' in the 'userdata' of a put_dhcpv6_opts
+ * action if the option is there and its value is 'size' bytes long, otherwise
+ * NULL.  Does not consume 'userdata'. */
+static const void *
+dhcpv6_userdata_opt(const struct ofpbuf *userdata, uint16_t code, size_t size)
+{
+    const struct dhcpv6_opt_header *opt;
+    size_t len = 0, opt_len = 0;
+
+    while ((opt = next_dhcpv6_opt(userdata->data, userdata->size,
+                                  &len, &opt_len))) {
+        if (ntohs(opt->code) == code) {
+            return opt_len == sizeof *opt + size
+                   ? DHCPV6_OPT_PAYLOAD(opt) : NULL;
+        }
+    }
+    return NULL;
+}
+
+/* Returns true if 'opt', a Server Identifier option from a client, carries
+ * the DUID that encode_dhcpv6_server_id_opt() makes of 'mac'. */
+static bool
+dhcpv6_server_id_matches(const struct dhcpv6_opt_header *opt,
+                         const struct eth_addr *mac)
+{
+    if (!opt || !mac) {
+        return false;
+    }
+
+    struct dhcpv6_opt_server_id server_id = {
+        .opt.code = htons(DHCPV6_OPT_SERVER_ID_CODE),
+        .opt.len = htons(sizeof server_id - sizeof server_id.opt),
+        .duid_type = htons(DHCPV6_DUID_LL),
+        .hw_type = htons(DHCPV6_HW_TYPE_ETH),
+        .mac = *mac,
+    };
+
+    return opt->len == server_id.opt.len
+           && !memcmp(opt, &server_id, sizeof server_id);
+}
+
+/* Appends to 'out_dhcpv6_opts', with preferred and valid lifetimes of 0, the
+ * addresses of 'in_ia_na', the IA_NA option of 'in_ia_na_len' bytes that a
+ * client sent, other than 'assigned'.  That tells the client to stop using
+ * them (RFC 8415, sections 18.3.4 and 18.3.5). */
+static void
+dhcpv6_put_stale_ia_addrs(struct ofpbuf *out_dhcpv6_opts,
+                          const struct dhcpv6_opt_ia_na *in_ia_na,
+                          size_t in_ia_na_len,
+                          const struct in6_addr *assigned)
+{
+    const uint8_t *in_opts = (const uint8_t *) (in_ia_na + 1);
+    size_t in_opts_len = in_ia_na_len - sizeof *in_ia_na;
+    const struct dhcpv6_opt_header *in_opt;
+    size_t len = 0, opt_len = 0;
+
+    while ((in_opt = next_dhcpv6_opt(in_opts, in_opts_len, &len, &opt_len))) {
+        if (ntohs(in_opt->code) != DHCPV6_OPT_IA_ADDR_CODE
+            || opt_len < sizeof(struct dhcpv6_opt_ia_addr)) {
+            continue;
+        }
+
+        struct dhcpv6_opt_ia_addr in_ia_addr;
+        memcpy(&in_ia_addr, in_opt, sizeof in_ia_addr);
+        if (ipv6_addr_equals(&in_ia_addr.ipv6, assigned)) {
+            continue;
+        }
+
+        struct dhcpv6_opt_ia_addr *opt_ia_addr = ofpbuf_put_zeros(
+            out_dhcpv6_opts, sizeof *opt_ia_addr);
+        opt_ia_addr->opt.code = htons(DHCPV6_OPT_IA_ADDR_CODE);
+        opt_ia_addr->opt.len = htons(sizeof *opt_ia_addr
+                                     - sizeof opt_ia_addr->opt);
+        opt_ia_addr->ipv6 = in_ia_addr.ipv6;
+    }
+}
+
+/* 'in_ia_na', if nonnull, is the IA_NA option of 'in_ia_na_len' bytes of the
+ * Renew or Rebind message that is being replied to. */
 static bool
 compose_out_dhcpv6_opts(struct ofpbuf *userdata,
                         struct ofpbuf *out_dhcpv6_opts,
-                        ovs_be32 iaid, bool ipxe_req, uint8_t fqdn_flags)
+                        ovs_be32 iaid, bool ipxe_req, uint8_t fqdn_flags,
+                        const struct dhcpv6_opt_ia_na *in_ia_na,
+                        size_t in_ia_na_len)
 {
     while (userdata->size) {
         struct dhcpv6_opt_header *userdata_opt = ofpbuf_try_pull(
@@ -3005,6 +3086,7 @@ compose_out_dhcpv6_opts(struct ofpbuf *userdata,
              * We will encapsulate the IA Address within the IA_NA option.
              * Please see RFC 3315 section 22.5 and 22.6
              */
+            size_t ia_na_ofs = out_dhcpv6_opts->size;
             struct dhcpv6_opt_ia_na *opt_ia_na = ofpbuf_put_zeros(
                 out_dhcpv6_opts, sizeof *opt_ia_na);
             opt_ia_na->opt.code = htons(DHCPV6_OPT_IA_NA_CODE);
@@ -3027,6 +3109,16 @@ compose_out_dhcpv6_opts(struct ofpbuf *userdata,
             memcpy(opt_ia_addr->ipv6.s6_addr, userdata_opt_data, size);
             opt_ia_addr->t1 = OVS_BE32_MAX;
             opt_ia_addr->t2 = OVS_BE32_MAX;
+
+            if (in_ia_na) {
+                struct in6_addr assigned = opt_ia_addr->ipv6;
+                dhcpv6_put_stale_ia_addrs(out_dhcpv6_opts, in_ia_na,
+                                          in_ia_na_len, &assigned);
+                opt_ia_na = ofpbuf_at_assert(out_dhcpv6_opts, ia_na_ofs,
+                                             sizeof *opt_ia_na);
+                opt_ia_na->opt.len = htons(out_dhcpv6_opts->size - ia_na_ofs
+                                           - sizeof opt_ia_na->opt);
+            }
             break;
         }
 
@@ -3132,6 +3224,25 @@ compose_dhcpv6_status(struct ofpbuf *userdata, struct ofpbuf *opts)
     return true;
 }
 
+/* Appends to 'opts' an IA_NA option for 'iaid' that holds no address, only
+ * the status NoBinding: the reply to a Renew for an IA that the server has
+ * assigned no address to (RFC 8415, section 18.3.4). */
+static void
+compose_dhcpv6_no_binding(struct ofpbuf *opts, ovs_be32 iaid)
+{
+    struct dhcpv6_opt_ia_na *opt_ia_na = ofpbuf_put_zeros(opts,
+                                                          sizeof *opt_ia_na);
+    opt_ia_na->opt.code = htons(DHCPV6_OPT_IA_NA_CODE);
+    opt_ia_na->opt.len = htons(sizeof *opt_ia_na - sizeof opt_ia_na->opt
+                               + DHCP6_OPT_STATUS_LEN);
+    opt_ia_na->iaid = iaid;
+
+    struct dhcpv6_opt_status *status = ofpbuf_put_zeros(opts, sizeof *status);
+    status->opt.code = htons(DHCPV6_OPT_STATUS_CODE);
+    status->opt.len = htons(DHCP6_OPT_STATUS_LEN - DHCP6_OPT_HEADER_LEN);
+    status->status_code = htons(DHCPV6_STATUS_CODE_NOBINDING);
+}
+
 #define DHCPV6_UC_PXE_OFFSET 2
 
 /* Called with in the pinctrl_handler thread context. */
@@ -3193,6 +3304,8 @@ pinctrl_handle_put_dhcpv6_opts(
 
     case DHCPV6_MSG_TYPE_REQUEST:
     case DHCPV6_MSG_TYPE_CONFIRM:
+    case DHCPV6_MSG_TYPE_RENEW:
+    case DHCPV6_MSG_TYPE_REBIND:
     case DHCPV6_MSG_TYPE_DECLINE:
     case DHCPV6_MSG_TYPE_INFO_REQ:
         out_dhcpv6_msg_type = DHCPV6_MSG_TYPE_REPLY;
@@ -3215,6 +3328,9 @@ pinctrl_handle_put_dhcpv6_opts(
      * */
     ovs_be32 iaid = 0;
     struct dhcpv6_opt_header const *in_opt_client_id = NULL;
+    struct dhcpv6_opt_header const *in_opt_server_id = NULL;
+    const struct dhcpv6_opt_ia_na *in_opt_ia_na = NULL;
+    size_t in_opt_ia_na_len = 0;
     bool ipxe_req = false;
     uint8_t fqdn_flags = DHCPV6_FQDN_FLAGS_UNDEFINED;
     size_t len = 0, opt_len = 0;
@@ -3236,11 +3352,17 @@ pinctrl_handle_put_dhcpv6_opts(
             struct dhcpv6_opt_ia_na *opt_ia_na = (
                 struct dhcpv6_opt_ia_na *)in_opt;
             iaid = opt_ia_na->iaid;
+            in_opt_ia_na = opt_ia_na;
+            in_opt_ia_na_len = opt_len;
             break;
         }
 
         case DHCPV6_OPT_CLIENT_ID_CODE:
             in_opt_client_id = in_opt;
+            break;
+
+        case DHCPV6_OPT_SERVER_ID_CODE:
+            in_opt_server_id = in_opt;
             break;
 
         case DHCPV6_OPT_USER_CLASS: {
@@ -3282,6 +3404,37 @@ pinctrl_handle_put_dhcpv6_opts(
         goto exit;
     }
 
+    /* A client extends its lease with a Renew to the server that gave it and,
+     * if that server does not answer, with a Rebind to any server.  A Renew
+     * is for the server that it names and a Rebind names none (RFC 8415,
+     * sections 16.8 and 16.9); what is not for this server continues through
+     * the pipeline, as any other message that is not replied to. */
+    bool renew = hdr->msg_type == DHCPV6_MSG_TYPE_RENEW;
+    bool rebind = hdr->msg_type == DHCPV6_MSG_TYPE_REBIND;
+    bool no_binding = false;
+    if (renew || rebind) {
+        const struct eth_addr *server_mac = dhcpv6_userdata_opt(
+            userdata, DHCPV6_OPT_SERVER_ID_CODE, sizeof *server_mac);
+        if (renew
+            ? !dhcpv6_server_id_matches(in_opt_server_id, server_mac)
+            : in_opt_server_id != NULL) {
+            goto exit;
+        }
+
+        /* No address is assigned in the stateless mode.  A server that has no
+         * binding says so in reply to a Renew and does not reply to a
+         * Rebind (RFC 8415, sections 18.3.4 and 18.3.5). */
+        if (!dhcpv6_userdata_opt(userdata, DHCPV6_OPT_IA_ADDR_CODE,
+                                 sizeof(struct in6_addr))) {
+            if (rebind) {
+                goto exit;
+            }
+            no_binding = true;
+        }
+    } else {
+        in_opt_ia_na = NULL;
+    }
+
     uint64_t out_ofpacts_dhcpv6_opts_stub[256 / 8];
     struct ofpbuf out_dhcpv6_opts =
         OFPBUF_STUB_INITIALIZER(out_ofpacts_dhcpv6_opts_stub);
@@ -3291,7 +3444,11 @@ pinctrl_handle_put_dhcpv6_opts(
         compose = compose_dhcpv6_status(userdata, &out_dhcpv6_opts);
     } else {
         compose = compose_out_dhcpv6_opts(userdata, &out_dhcpv6_opts, iaid,
-                                          ipxe_req, fqdn_flags);
+                                          ipxe_req, fqdn_flags, in_opt_ia_na,
+                                          in_opt_ia_na_len);
+        if (compose && no_binding) {
+            compose_dhcpv6_no_binding(&out_dhcpv6_opts, iaid);
+        }
     }
 
     if (!compose) {

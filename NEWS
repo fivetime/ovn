@@ -1,5 +1,6 @@
 Post v26.09.0
 --------------
+   - The native DHCPv6 server now replies to Renew and Rebind messages.
    - Added a new "options:ttl" key on the NB DNS table to make the TTL of
      DNS replies from OVN's native DNS resolver configurable per row.
    - Removed implementations of the commit_ecmp_nh, chk_ecmp_nh, and

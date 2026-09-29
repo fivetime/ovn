@@ -7888,6 +7888,74 @@ test_dhcpv6_release() {
     n_resume=$((n_resume + 1))
 }
 
+# This shell function sends a DHCPv6 Renew (MSG_TYPE 5) or Rebind (6)
+# test_dhcpv6_renew INPORT SRC_MAC SRC_LLA MSG_TYPE SERVER_ID HELD_IPS REPLY
+#                   OUTPORT...
+# SERVER_ID is the MAC of the server that the message names, empty for none.
+# HELD_IPS are the addresses that the client lists in its IA_NA.
+# REPLY is what the IA_NA of the expected reply holds: the address that is
+# assigned followed by the addresses that are returned with lifetimes of 0,
+# or "nobinding".  If it is empty, no reply is expected and the OUTPORTs are
+# as in test_dhcpv6.
+test_dhcpv6_renew() {
+    local inport=$1 src_mac=$2 src_lla=$3 msg_code=$4 server_id=$5 held=$6
+    local reply_ia=$7
+    shift; shift; shift; shift; shift; shift; shift;
+
+    local ip ia_scapy=
+    for ip in $held; do
+        ia_scapy="${ia_scapy}DHCP6OptIAAddress(addr='${ip}', \
+                  preflft=3600, validlft=7200), "
+    done
+    local req_scapy="Ether(dst='33:33:00:01:00:02', src='${src_mac}')/ \
+                     IPv6(dst='ff02::1:2', src='${src_lla}')/ \
+                     UDP(sport=546, dport=547)/ \
+                     DHCP6(msgtype=${msg_code}, trid=0x010203)/ \
+                     DHCP6OptClientId(duid=DUID_LL(lladdr='${src_mac}'))"
+    if test -n "$server_id"; then
+        req_scapy="${req_scapy}/ \
+                   DHCP6OptServerId(duid=DUID_LL(lladdr='${server_id}'))"
+    fi
+    req_scapy="${req_scapy}/DHCP6OptIA_NA(iaid=0x01020304, T1=1800, T2=2880, \
+               ianaopts=[[${ia_scapy}]])"
+    request=$(fmt_pkt "${req_scapy}")
+
+    if test -n "$reply_ia"; then
+        local server="DHCP6OptServerId(duid=DUID_LL(lladdr='00:00:00:10:00:01'))"
+        local rep_scapy="Ether(dst='${src_mac}', src='00:00:00:10:00:01')/ \
+                         IPv6(dst='${src_lla}', src='fe80::0200:00ff:fe10:0001')/ \
+                         UDP(sport=547, dport=546)/ \
+                         DHCP6(msgtype=7, trid=0x010203)/ \
+                         DHCP6OptClientId(duid=DUID_LL(lladdr='${src_mac}'))"
+        if test "$reply_ia" = nobinding; then
+            rep_scapy="${rep_scapy}/${server}/ \
+                       DHCP6OptIA_NA(iaid=0x01020304, T1=0, T2=0, \
+                       ianaopts=[[DHCP6OptStatusCode(statuscode=3)]])"
+        else
+            local lifetime=0xffffffff
+            ia_scapy=
+            for ip in $reply_ia; do
+                ia_scapy="${ia_scapy}DHCP6OptIAAddress(addr='${ip}', \
+                          preflft=${lifetime}, validlft=${lifetime}), "
+                lifetime=0
+            done
+            rep_scapy="${rep_scapy}/ \
+                       DHCP6OptIA_NA(iaid=0x01020304, T1=0xffffffff, \
+                       T2=0xffffffff, ianaopts=[[${ia_scapy}]])/${server}"
+        fi
+        reply=$(fmt_pkt "${rep_scapy}")
+        echo $reply | trim_zeros >> $inport.expected
+    else
+        for outport; do
+            echo $request | trim_zeros >> $outport.expected
+        done
+    fi
+
+    as hv1 ovs-appctl netdev-dummy/receive hv1-vif$inport $request
+    OVS_WAIT_UNTIL([test $n_resume = `cat ofctl_monitor*.log | grep -c NXT_RESUME`])
+    n_resume=$((n_resume + 1))
+}
+
 check_packets() {
     local port=$1
 
@@ -7950,6 +8018,38 @@ reset_pcap_file hv1-vif1 hv1/vif1
 test_dhcpv6_release 1 $src_mac $src_lla $offer_ip
 check_packets 1
 
+# A Renew to this server and a Rebind, which is to any server, are replied to
+# with the address that is assigned.
+server_mac="00:00:00:10:00:01"
+for msg in "5 $server_mac" "6"; do
+    reset_pcap_file hv1-vif1 hv1/vif1
+    set -- $msg
+    test_dhcpv6_renew 1 $src_mac $src_lla $1 "$2" "$offer_ip" "$offer_ip"
+    check_packets 1
+done
+
+# An address that the client holds and that is not the one assigned comes
+# back with lifetimes of 0.
+for msg in "5 $server_mac" "6"; do
+    reset_pcap_file hv1-vif1 hv1/vif1
+    set -- $msg
+    test_dhcpv6_renew 1 $src_mac $src_lla $1 "$2" "ae70::99 $offer_ip" \
+        "$offer_ip ae70::99"
+    check_packets 1
+done
+
+# A Renew to another server, a Renew to no server and a Rebind to a server
+# are not replied to: ls1-lp2 receives them as it receives an invalid packet
+# below.
+for msg in "5 00:00:00:10:00:02" "5" "6 $server_mac"; do
+    reset_pcap_file hv1-vif1 hv1/vif1
+    reset_pcap_file hv1-vif2 hv1/vif2
+    set -- $msg
+    test_dhcpv6_renew 1 $src_mac $src_lla $1 "$2" "$offer_ip" "" 2 2
+    check_empty_packets 1
+    check_packets 2
+done
+
 # Send invalid packet on ls1-lp2. ovn-controller should resume the packet
 # without any modifications and the packet should be received by ls1-lp1.
 # ls1-lp1 will receive the packet twice, one from the ovn-controller after the
@@ -7988,6 +8088,18 @@ reset_pcap_file hv1-vif5 hv1/vif5
 
 test_dhcpv6 5 $src_mac $src_lla 11 1 "" "" 5
 check_packets 5
+
+# No address is assigned on ls1-lp3.  The reply to a Renew says so and a
+# Rebind is not replied to.
+reset_pcap_file hv1-vif5 hv1/vif5
+test_dhcpv6_renew 5 $src_mac $src_lla 5 00:00:00:10:00:01 "ae70::22" nobinding
+check_packets 5
+
+reset_pcap_file hv1-vif1 hv1/vif1
+reset_pcap_file hv1-vif5 hv1/vif5
+test_dhcpv6_renew 5 $src_mac $src_lla 6 "" "ae70::22" "" 1 1
+check_empty_packets 5
+check_packets 1
 
 check ovn-nbctl --all destroy dhcp-option
 d1="$(ovn-nbctl create DHCP_Options cidr="ae70\:\:/64")"
