@@ -1,6 +1,9 @@
 Post v26.09.0
 --------------
    - The native DHCPv6 server now replies to Renew and Rebind messages.
+   - Added a new "lease_time" DHCPv6 option to the NB DHCP_Options table:
+     the lifetime of the address that the native DHCPv6 server leases, from
+     which T1 and T2 follow.  When unset, the lease has no end, as before.
    - Added a new "options:ttl" key on the NB DNS table to make the TTL of
      DNS replies from OVN's native DNS resolver configurable per row.
    - Removed implementations of the commit_ecmp_nh, chk_ecmp_nh, and

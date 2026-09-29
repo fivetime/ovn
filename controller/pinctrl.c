@@ -3050,6 +3050,22 @@ compose_out_dhcpv6_opts(struct ofpbuf *userdata,
                         const struct dhcpv6_opt_ia_na *in_ia_na,
                         size_t in_ia_na_len)
 {
+    /* For how long the address is leased: for "lease_time" seconds, without
+     * an end if that is not set.  T1 and T2 are the 0.5 and 0.8 times the
+     * preferred lifetime that RFC 8415, section 21.4, recommends; a lease
+     * without an end is not extended (section 7.7). */
+    ovs_be32 lifetime = OVS_BE32_MAX, t1 = OVS_BE32_MAX, t2 = OVS_BE32_MAX;
+    const void *lease_time_opt = dhcpv6_userdata_opt(
+        userdata, DHCPV6_OPT_LEASE_TIME_CODE, sizeof lifetime);
+    if (lease_time_opt) {
+        lifetime = get_unaligned_be32(lease_time_opt);
+        if (lifetime != OVS_BE32_MAX) {
+            uint32_t lease_time = ntohl(lifetime);
+            t1 = htonl(lease_time / 2);
+            t2 = htonl((uint64_t) lease_time * 4 / 5);
+        }
+    }
+
     while (userdata->size) {
         struct dhcpv6_opt_header *userdata_opt = ofpbuf_try_pull(
             userdata, sizeof *userdata_opt);
@@ -3098,17 +3114,17 @@ compose_out_dhcpv6_opts(struct ofpbuf *userdata,
              */
             opt_ia_na->opt.len = htons(12 + sizeof(struct dhcpv6_opt_ia_addr));
             opt_ia_na->iaid = iaid;
-            /* Set the lifetime of the address(es) to infinity */
-            opt_ia_na->t1 = OVS_BE32_MAX;
-            opt_ia_na->t2 = OVS_BE32_MAX;
+            opt_ia_na->t1 = t1;
+            opt_ia_na->t2 = t2;
 
             struct dhcpv6_opt_ia_addr *opt_ia_addr = ofpbuf_put_zeros(
                 out_dhcpv6_opts, sizeof *opt_ia_addr);
             opt_ia_addr->opt.code = htons(DHCPV6_OPT_IA_ADDR_CODE);
             opt_ia_addr->opt.len = htons(size + 8);
             memcpy(opt_ia_addr->ipv6.s6_addr, userdata_opt_data, size);
-            opt_ia_addr->t1 = OVS_BE32_MAX;
-            opt_ia_addr->t2 = OVS_BE32_MAX;
+            /* The preferred and the valid lifetime. */
+            opt_ia_addr->t1 = lifetime;
+            opt_ia_addr->t2 = lifetime;
 
             if (in_ia_na) {
                 struct in6_addr assigned = opt_ia_addr->ipv6;
@@ -3164,6 +3180,13 @@ compose_out_dhcpv6_opts(struct ofpbuf *userdata,
             }
             break;
         }
+
+        case DHCPV6_OPT_LEASE_TIME_CODE:
+            /* Went into the IA_NA option. */
+            if (size != sizeof(ovs_be32)) {
+                return false;
+            }
+            break;
 
         case DHCPV6_OPT_FQDN_CODE: {
             if (fqdn_flags != DHCPV6_FQDN_FLAGS_UNDEFINED) {

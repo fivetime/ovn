@@ -6082,8 +6082,8 @@ or
         OVN also implements native DHCPv6 support. The CMS should define
         the set of DHCPv6 options as key/value pairs. The define DHCPv6
         options will be included in the DHCPv6 response to the DHCPv6
-        Solicit/Request/Confirm packet from the logical ports having the
-        IPv6 addresses in the <ref column="cidr"/>.
+        Solicit/Request/Confirm/Renew/Rebind packet from the logical ports
+        having the IPv6 addresses in the <ref column="cidr"/>.
       </p>
 
       <group title="Mandatory DHCPv6 options">
@@ -6151,6 +6151,39 @@ or
           <p>
             The DHCPv6 option code for this option is 39.
             If set, indicates the DHCPv6 option "FQDN".
+          </p>
+        </column>
+      </group>
+
+      <group title="Integer DHCPv6 options">
+        <column name="options" key="lease_time"
+                type='{"type": "integer", "minInteger": 1,
+                       "maxInteger": 4294967295}'>
+          <p>
+            For how many seconds the address is leased: the preferred and
+            the valid lifetime of the address in the DHCPv6 reply, as
+            <code>lease_time</code> of the DHCPv4 options is for an IPv4
+            address.  The client is told to extend the lease with a Renew
+            after 0.5 times (T1) and with a Rebind after 0.8 times (T2) this
+            time, the values that RFC 8415 recommends.  This is not a DHCPv6
+            option of its own, it has no option code.
+          </p>
+
+          <p>
+            By default, and with the value 4294967295 (RFC 8415, section
+            7.7), the lease has no end and the client never extends it.
+            A client then learns of a change of the address of the logical
+            port only when it next asks for an address on its own, such as
+            when it is restarted.
+          </p>
+
+          <p>
+            The option has no effect with <code>dhcpv6_stateless</code>,
+            where no address is leased.
+          </p>
+
+          <p>
+            Example: <code>43200</code>.
           </p>
         </column>
       </group>

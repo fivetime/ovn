@@ -4649,6 +4649,25 @@ tcp.flags = RST;
           </p>
         </dd>
 
+        <dt><code>value: uint32</code></dt>
+        <dd>
+          <p>
+            This indicates that the value of the DHCPv6 option is a 32-bit
+            unsigned integer.
+          </p>
+
+          <p>
+            Example. "name=lease_time", "code=253", "type=uint32".  This is
+            not a DHCPv6 option of its own: <code>ovn-controller</code> puts
+            the value into the lifetimes of the IA Address option and derives
+            T1 and T2 of the IA_NA option from it.
+          </p>
+
+          <p>
+            put_dhcpv6_opts(..., lease_time = 43200,...)
+          </p>
+        </dd>
+
         <dt><code>value: domain</code></dt>
         <dd>
           <p>

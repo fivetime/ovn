@@ -6363,9 +6363,25 @@ build_dhcpv6_action(struct ovn_port *op, struct in6_addr *offer_ip,
 
     /* Check whether the dhcpv6 options should be configured as stateful.
      * Only reply with ia_addr option for dhcpv6 stateful address mode. */
-    if (!smap_get_bool(options_map, "dhcpv6_stateless", false)) {
+    bool stateless = smap_get_bool(options_map, "dhcpv6_stateless", false);
+    if (!stateless) {
         ipv6_string_mapped(ia_addr, offer_ip);
         ds_put_format(options_action, "ia_addr = %s, ", ia_addr);
+    }
+
+    /* "lease_time" is the lease of "ia_addr".  A lease of 0 seconds is none
+     * at all: it would have the client remove the address it just got. */
+    bool lease_time = !stateless;
+    const char *lease_time_s = smap_get(options_map, "lease_time");
+    unsigned int lease_time_val;
+    if (lease_time && lease_time_s
+        && (!str_to_uint(lease_time_s, 10, &lease_time_val)
+            || !lease_time_val)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "ignoring lease_time \"%s\" in the DHCPv6 options"
+                          " for lport %s: not a positive number of seconds",
+                     lease_time_s, op->json_key);
+        lease_time = false;
     }
 
     /* We're not using SMAP_FOR_EACH because we want a consistent order of the
@@ -6373,9 +6389,11 @@ build_dhcpv6_action(struct ovn_port *op, struct in6_addr *offer_ip,
     const struct smap_node **sorted_opts = smap_sort(options_map);
     for (size_t i = 0; i < smap_count(options_map); i++) {
         const struct smap_node *node = sorted_opts[i];
-        if (strcmp(node->key, "dhcpv6_stateless")) {
-            ds_put_format(options_action, "%s = %s, ", node->key, node->value);
+        if (!strcmp(node->key, "dhcpv6_stateless")
+            || (!strcmp(node->key, "lease_time") && !lease_time)) {
+            continue;
         }
+        ds_put_format(options_action, "%s = %s, ", node->key, node->value);
     }
     free(sorted_opts);
 

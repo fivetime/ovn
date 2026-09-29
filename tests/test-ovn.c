@@ -208,6 +208,7 @@ create_gen_opts(struct hmap *dhcp_opts, struct hmap *dhcpv6_opts,
     dhcp_opt_add(dhcpv6_opts, "bootfile_name", 59, "str");
     dhcp_opt_add(dhcpv6_opts, "bootfile_name_alt", 254, "str");
     dhcp_opt_add(dhcpv6_opts, "fqdn", 39, "domain");
+    dhcp_opt_add(dhcpv6_opts, "lease_time", 253, "uint32");
 
     /* IPv6 ND RA options. */
     hmap_init(nd_ra_opts);

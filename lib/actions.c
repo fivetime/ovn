@@ -3223,6 +3223,10 @@ encode_put_dhcpv6_option(const struct ovnact_gen_option *o,
         ofpbuf_put(ofpacts, encoded, size);
 
         free(encoded);
+    } else if (!strcmp(o->option->type, "uint32")) {
+        size = sizeof(ovs_be32);
+        opt->len = htons(size);
+        ofpbuf_put(ofpacts, &c->value.be32_int, size);
     }
 }
 

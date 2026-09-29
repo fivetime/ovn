@@ -1654,6 +1654,10 @@ reg1[[0]] = put_dhcpv6_opts(bootfile_name_alt="https://127.0.0.1/boot.ipxe");
 reg1[[0]] = put_dhcpv6_opts(fqdn="ovn.org");
     formats as reg1[[0]] = put_dhcpv6_opts(fqdn = "ovn.org");
     encodes as controller(userdata=00.00.00.05.00.00.00.00.00.01.de.10.00.00.00.40.00.27.00.09.03.6f.76.6e.03.6f.72.67.00,pause)
+reg1[[0]] = put_dhcpv6_opts(ia_addr = ae70::4, lease_time = 43200);
+    encodes as controller(userdata=00.00.00.05.00.00.00.00.00.01.de.10.00.00.00.40.00.05.00.10.ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.04.00.fd.00.04.00.00.a8.c0,pause)
+reg1[[0]] = put_dhcpv6_opts(lease_time = "43200");
+    DHCPv6 option lease_time requires numeric value.
 
 # lookup_nd
 reg2[[0]] = lookup_nd(inport, ip6.dst, eth.src);
@@ -7795,6 +7799,12 @@ n_resume=0
 # The OUTPORTs (zero or more) list the VIFs on which the original DHCPv6
 # packet should be received twice (one from ovn-controller and the other
 # from the "ovs-ofctl monitor br-int resume"
+# The lifetimes of an address and T1 and T2 in the expected replies: those of
+# a lease without an end unless a test sets "lease_time".
+lifetime=0xffffffff
+t1=0xffffffff
+t2=0xffffffff
+
 test_dhcpv6() {
     local inport=$1 src_mac=$2 src_lla=$3 msg_code=$4 offer_ip=$5 boot_file=$6
     local fqdn=$7
@@ -7833,10 +7843,10 @@ test_dhcpv6() {
 
         if test $offer_ip != 1; then
             local ip_scapy="DHCP6OptIAAddress(addr='${offer_ip}', \
-                            preflft=0xffffffff, validlft=0xffffffff)"
+                            preflft=${lifetime}, validlft=${lifetime})"
             rep_scapy="${rep_scapy}/ \
-                       DHCP6OptIA_NA(iaid=0x01020304, T1=0xffffffff, \
-                       T2=0xffffffff, ianaopts=[[${ip_scapy}]])"
+                       DHCP6OptIA_NA(iaid=0x01020304, T1=${t1}, \
+                       T2=${t2}, ianaopts=[[${ip_scapy}]])"
         fi
         if test -n "$boot_file"; then
             rep_scapy="${rep_scapy}/DHCP6OptBootFileUrl(optdata=b'${boot_file}')"
@@ -7932,16 +7942,16 @@ test_dhcpv6_renew() {
                        DHCP6OptIA_NA(iaid=0x01020304, T1=0, T2=0, \
                        ianaopts=[[DHCP6OptStatusCode(statuscode=3)]])"
         else
-            local lifetime=0xffffffff
+            local ia_lifetime=$lifetime
             ia_scapy=
             for ip in $reply_ia; do
                 ia_scapy="${ia_scapy}DHCP6OptIAAddress(addr='${ip}', \
-                          preflft=${lifetime}, validlft=${lifetime}), "
-                lifetime=0
+                          preflft=${ia_lifetime}, validlft=${ia_lifetime}), "
+                ia_lifetime=0
             done
             rep_scapy="${rep_scapy}/ \
-                       DHCP6OptIA_NA(iaid=0x01020304, T1=0xffffffff, \
-                       T2=0xffffffff, ianaopts=[[${ia_scapy}]])/${server}"
+                       DHCP6OptIA_NA(iaid=0x01020304, T1=${t1}, \
+                       T2=${t2}, ianaopts=[[${ia_scapy}]])/${server}"
         fi
         reply=$(fmt_pkt "${rep_scapy}")
         echo $reply | trim_zeros >> $inport.expected
@@ -8148,6 +8158,49 @@ check_packets 2
 reset_pcap_file hv1-vif2 hv1/vif2
 
 test_dhcpv6_release 2 $src_mac $src_lla $offer_ip
+check_packets 2
+
+# With "lease_time" the address is leased for that long and T1 and T2 are 0.5
+# and 0.8 times it, in the replies to a Solicit, a Request, a Renew and a
+# Rebind alike.
+check ovn-nbctl --all destroy dhcp-option
+d1="$(ovn-nbctl create DHCP_Options cidr="ae70\:\:/64")"
+check ovn-nbctl dhcp-options-set-options $d1 \
+    server_id=00:00:00:10:00:01 lease_time=43200
+check ovn-nbctl --wait=hv lsp-set-dhcpv6-options ls1-lp2 ${d1}
+lifetime=43200 t1=21600 t2=34560
+
+for msg in 1 3; do
+    reset_pcap_file hv1-vif2 hv1/vif2
+    test_dhcpv6 2 $src_mac $src_lla $msg $offer_ip "" ""
+    check_packets 2
+done
+for msg in "5 00:00:00:10:00:01" "6"; do
+    reset_pcap_file hv1-vif2 hv1/vif2
+    set -- $msg
+    test_dhcpv6_renew 2 $src_mac $src_lla $1 "$2" "$offer_ip" "$offer_ip"
+    check_packets 2
+done
+
+# The largest value is a lease without an end, which has no T1 and T2 to
+# derive, and so is what "lease_time" is ignored for: a lease of no seconds
+# and what is not a number.
+lifetime=0xffffffff t1=0xffffffff t2=0xffffffff
+for lease_time in 4294967295 0 12h; do
+    check ovn-nbctl --wait=hv dhcp-options-set-options $d1 \
+        server_id=00:00:00:10:00:01 lease_time=$lease_time
+    reset_pcap_file hv1-vif2 hv1/vif2
+    test_dhcpv6 2 $src_mac $src_lla 1 $offer_ip "" ""
+    check_packets 2
+done
+
+# No address is leased in the stateless mode.
+check ovn-nbctl --wait=hv dhcp-options-set-options $d1 \
+    server_id=00:00:00:10:00:01 lease_time=43200 dhcpv6_stateless=true
+AT_CHECK([ovn-sbctl dump-flows ls1 | grep put_dhcpv6_opts | grep -c lease_time], [1], [0
+])
+reset_pcap_file hv1-vif2 hv1/vif2
+test_dhcpv6 2 $src_mac $src_lla 1 1 "" ""
 check_packets 2
 
 OVN_CLEANUP([hv1])

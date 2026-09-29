@@ -1,7 +1,7 @@
 {
     "name": "OVN_Southbound",
-    "version": "21.13.0",
-    "cksum": "2401729496 36997",
+    "version": "21.13.1",
+    "cksum": "2419856649 37048",
     "tables": {
         "SB_Global": {
             "columns": {
@@ -329,7 +329,8 @@
                 "type": {
                     "type": {"key": {
                         "type": "string",
-                        "enum": ["set", ["ipv6", "str", "mac", "domain"]]}}}},
+                        "enum": ["set", ["ipv6", "str", "mac", "domain",
+                                         "uint32"]]}}}},
             "isRoot": true},
         "Connection": {
             "columns": {

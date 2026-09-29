@@ -277,6 +277,10 @@ BUILD_ASSERT_DECL(DHCP_OPT_HEADER_LEN == sizeof(struct dhcp_opt_header));
 #define DHCPV6_OPT_FQDN_CODE             39
 #define DHCPV6_OPT_BOOT_FILE_URL         59
 #define DHCPV6_OPT_BOOT_FILE_URL_ALT    254
+/* Not a DHCPv6 option.  For how long the address of "ia_addr" is leased; it
+ * becomes the lifetimes of the IA Address option and T1 and T2 of the IA_NA
+ * option, never an option of its own. */
+#define DHCPV6_OPT_LEASE_TIME_CODE      253
 
 /* DHCPv6 Status codes */
 #define DHCPV6_STATUS_CODE_SUCCESS   0
@@ -302,6 +306,9 @@ BUILD_ASSERT_DECL(DHCP_OPT_HEADER_LEN == sizeof(struct dhcp_opt_header));
 
 #define DHCPV6_OPT_FQDN \
     DHCP_OPTION("fqdn", DHCPV6_OPT_FQDN_CODE, "domain")
+
+#define DHCPV6_OPT_LEASE_TIME \
+    DHCP_OPTION("lease_time", DHCPV6_OPT_LEASE_TIME_CODE, "uint32")
 
 /* DHCPv6 FQDN flags. RFC 4704 */
 #define DHCPV6_FQDN_FLAGS_UNDEFINED 0xff
