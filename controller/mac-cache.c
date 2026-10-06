@@ -25,6 +25,7 @@
 #include "openvswitch/hmap.h"
 #include "openvswitch/vlog.h"
 #include "ovn/logical-fields.h"
+#include "uuidset.h"
 #include "ovn-sb-idl.h"
 #include "pinctrl.h"
 
@@ -403,7 +404,8 @@ mac_binding_update_log(const char *action,
 
 void
 mac_binding_stats_run(struct vector *stats_vec, uint64_t *req_delay,
-                      void *data, long long timewall_now)
+                      void *data, struct uuidset *pending,
+                      long long timewall_now)
 {
     struct mac_cache_data *cache_data = data;
 
@@ -417,18 +419,25 @@ mac_binding_stats_run(struct vector *stats_vec, uint64_t *req_delay,
             continue;
         }
 
-        uint64_t since_updated_ms = timewall_now - mb->sbrec->timestamp;
         struct mac_cache_threshold *threshold =
-                mac_cache_threshold_find(cache_data, mb->data.dp_key);
+            mac_cache_threshold_find(cache_data, mb->data.dp_key);
+        if (timewall_now < mb->sbrec->timestamp) {
+            mac_binding_update_log("Not updating with future timestamp",
+                                   &mb->data, true, threshold,
+                                   stats->idle_age_ms, 0);
+            continue;
+        }
+
+        uint64_t since_updated_ms = timewall_now - mb->sbrec->timestamp;
 
         /* If "idle_age" is under threshold it means that the mac binding is
          * used on this chassis. */
         if (stats->idle_age_ms < threshold->value) {
             if (since_updated_ms >= threshold->cooldown_period) {
-                mac_binding_update_log("Updating active", &mb->data, true,
-                                       threshold, stats->idle_age_ms,
-                                       since_updated_ms);
-                sbrec_mac_binding_set_timestamp(mb->sbrec, timewall_now);
+                mac_binding_update_log("Queuing timestamp update for active",
+                                       &mb->data, true, threshold,
+                                       stats->idle_age_ms, since_updated_ms);
+                uuidset_insert(pending, &mb->sbrec->header_.uuid);
             } else {
                 /* Postponing the update to avoid sending database transactions
                  * too frequently. */
@@ -446,6 +455,37 @@ mac_binding_stats_run(struct vector *stats_vec, uint64_t *req_delay,
     mac_cache_update_req_delay(&cache_data->thresholds, req_delay);
     if (*req_delay) {
         VLOG_DBG("MAC binding statistics delay: %"PRIu64, *req_delay);
+    }
+}
+
+void
+mac_binding_stats_drain(struct ovsdb_idl_txn *txn, struct uuidset *pending,
+                        size_t batch_size, long long timewall_now)
+{
+    struct ovsdb_idl *idl = ovsdb_idl_txn_get_idl(txn);
+    size_t drained = 0;
+
+    struct uuidset_node *node;
+    UUIDSET_FOR_EACH_SAFE (node, pending) {
+        if (drained == batch_size) {
+            break;
+        }
+
+        const struct sbrec_mac_binding *mb =
+            sbrec_mac_binding_get_for_uuid(idl, &node->uuid);
+        if (mb) {
+            sbrec_mac_binding_set_timestamp(mb, timewall_now);
+
+            if (VLOG_IS_DBG_ENABLED()) {
+                struct mac_binding_data data;
+                if (mac_binding_data_from_sbrec(&data, mb)) {
+                    mac_binding_update_log("Updating active", &data, false,
+                                           NULL, 0, 0);
+                }
+            }
+        }
+        uuidset_delete(pending, node);
+        drained++;
     }
 }
 
@@ -501,7 +541,7 @@ fdb_update_log(const char *action,
 
 void
 fdb_stats_run(struct vector *stats_vec, uint64_t *req_delay, void *data,
-              long long timewall_now)
+              struct uuidset *pending, long long timewall_now)
 {
     struct mac_cache_data *cache_data = data;
 
@@ -515,18 +555,24 @@ fdb_stats_run(struct vector *stats_vec, uint64_t *req_delay, void *data,
             continue;
         }
 
-        uint64_t since_updated_ms = timewall_now - fdb->sbrec_fdb->timestamp;
         struct mac_cache_threshold *threshold =
-                mac_cache_threshold_find(cache_data, fdb->data.dp_key);
+            mac_cache_threshold_find(cache_data, fdb->data.dp_key);
+        if (timewall_now < fdb->sbrec_fdb->timestamp) {
+            fdb_update_log("Not updating with future timestamp", &fdb->data,
+                           true, threshold, stats->idle_age_ms, 0);
+            continue;
+        }
+
+        uint64_t since_updated_ms = timewall_now - fdb->sbrec_fdb->timestamp;
 
         /* If "idle_age" is under threshold it means that the fdb entry is
          * used on this chassis. */
         if (stats->idle_age_ms < threshold->value) {
             if (since_updated_ms >= threshold->cooldown_period) {
-                fdb_update_log("Updating active", &fdb->data, true,
-                               threshold, stats->idle_age_ms,
-                               since_updated_ms);
-                sbrec_fdb_set_timestamp(fdb->sbrec_fdb, timewall_now);
+                fdb_update_log("Queuing timestamp update for active",
+                               &fdb->data, true, threshold,
+                               stats->idle_age_ms, since_updated_ms);
+                uuidset_insert(pending, &fdb->sbrec_fdb->header_.uuid);
             } else {
                 /* Postponing the update to avoid sending database transactions
                  * too frequently. */
@@ -543,6 +589,36 @@ fdb_stats_run(struct vector *stats_vec, uint64_t *req_delay, void *data,
     mac_cache_update_req_delay(&cache_data->thresholds, req_delay);
     if (*req_delay) {
         VLOG_DBG("FDB entry statistics delay: %"PRIu64, *req_delay);
+    }
+}
+
+void
+fdb_stats_drain(struct ovsdb_idl_txn *txn, struct uuidset *pending,
+                size_t batch_size, long long timewall_now)
+{
+    struct ovsdb_idl *idl = ovsdb_idl_txn_get_idl(txn);
+    size_t drained = 0;
+
+    struct uuidset_node *node;
+    UUIDSET_FOR_EACH_SAFE (node, pending) {
+        if (drained == batch_size) {
+            break;
+        }
+
+        const struct sbrec_fdb *fdb = sbrec_fdb_get_for_uuid(idl, &node->uuid);
+        if (fdb) {
+            sbrec_fdb_set_timestamp(fdb, timewall_now);
+
+            if (VLOG_IS_DBG_ENABLED()) {
+                struct fdb_data data;
+                if (fdb_data_from_sbrec(&data, fdb)) {
+                    fdb_update_log("Updating active", &data, false,
+                                   NULL, 0, 0);
+                }
+            }
+        }
+        uuidset_delete(pending, node);
+        drained++;
     }
 }
 
@@ -888,7 +964,8 @@ mac_binding_probe_stats_process_flow_stats(
 
 void
 mac_binding_probe_stats_run(struct vector *stats_vec, uint64_t *req_delay,
-                            void *data, long long timewall_now)
+                            void *data, struct uuidset *pending OVS_UNUSED,
+                            long long timewall_now)
 {
     struct mac_binding_probe_data *probe_data = data;
     struct mac_cache_data *cache_data = probe_data->cache_data;
@@ -904,7 +981,15 @@ mac_binding_probe_stats_run(struct vector *stats_vec, uint64_t *req_delay,
         }
 
         struct mac_cache_threshold *threshold =
-                mac_cache_threshold_find(cache_data, mb->data.dp_key);
+            mac_cache_threshold_find(cache_data, mb->data.dp_key);
+        if (timewall_now < mb->sbrec->timestamp) {
+            mac_binding_update_log("Not sending ARP/ND request with future "
+                                   "timestamp", &mb->data, true, threshold,
+                                   stats->idle_age_ms, 0);
+            mb->arp_attempts = 0;
+            continue;
+        }
+
         uint64_t since_updated_ms = timewall_now - mb->sbrec->timestamp;
         const struct sbrec_mac_binding *sbrec = mb->sbrec;
 
@@ -915,9 +1000,11 @@ mac_binding_probe_stats_run(struct vector *stats_vec, uint64_t *req_delay,
             continue;
         }
 
-        if (since_updated_ms < threshold->cooldown_period) {
+        if (since_updated_ms < threshold->cooldown_period ||
+            uuidset_contains(probe_data->mac_binding_pending,
+                             &sbrec->header_.uuid)) {
             mac_binding_update_log(
-                    "Not sending ARP/ND request for recently updated",
+                    "Not sending ARP/ND request for recently/to be updated",
                     &mb->data, true, threshold, stats->idle_age_ms,
                     since_updated_ms);
             mb->arp_attempts = 0;

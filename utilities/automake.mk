@@ -18,16 +18,12 @@ MAN_ROOTS += \
     utilities/ovn-detrace.1.in
 
 bin_SCRIPTS += \
-    utilities/ovn-docker-overlay-driver \
-    utilities/ovn-docker-underlay-driver \
     utilities/ovn_detrace.py
 
 EXTRA_DIST += \
     utilities/ovn-ctl \
     utilities/ovn-lib.in \
     utilities/ovn-ctl.8.xml \
-    utilities/ovn-docker-overlay-driver.in \
-    utilities/ovn-docker-underlay-driver.in \
     utilities/ovn-nbctl.8.xml \
     utilities/ovn-sbctl.8.xml \
     utilities/ovn-ic-nbctl.8.xml \
@@ -48,8 +44,6 @@ EXTRA_DIST += \
 CLEANFILES += \
     utilities/ovn-ctl.8 \
     utilities/ovn-lib \
-    utilities/ovn-docker-overlay-driver \
-    utilities/ovn-docker-underlay-driver \
     utilities/ovn-nbctl.8 \
     utilities/ovn-sbctl.8 \
     utilities/ovn-ic-nbctl.8 \
@@ -60,11 +54,7 @@ CLEANFILES += \
     utilities/ovn-detrace \
     utilities/ovn_detrace.py \
     utilities/ovn-appctl.8 \
-    utilities/ovn-appctl \
-    utilities/ovn-sim
-
-EXTRA_DIST += utilities/ovn-sim.in
-noinst_SCRIPTS += utilities/ovn-sim
+    utilities/ovn-appctl
 
 utilities/ovn-lib: $(top_builddir)/config.status
 
@@ -125,5 +115,3 @@ utilities_ovn_brctl_SOURCES = \
     utilities/ovn-dbctl.h \
     utilities/ovn-brctl.c
 utilities_ovn_brctl_LDADD = lib/libovn.la $(OVSDB_LIBDIR)/libovsdb.la $(OVS_LIBDIR)/libopenvswitch.la
-
-include utilities/bugtool/automake.mk

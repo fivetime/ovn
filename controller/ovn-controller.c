@@ -1073,6 +1073,7 @@ en_ofctrl_is_connected_run(struct engine_node *node OVS_UNUSED, void *data)
         if (!of_data->connected) {
             ofctrl_seqno_flush();
             if_status_mgr_clear(ctrl_ctx->if_mgr);
+            pinctrl_seqno_flush();
         }
         return EN_UPDATED;
     }
@@ -8311,10 +8312,8 @@ main(int argc, char *argv[])
             }
         }
 
-        static bool chassis_idx_stored = false;
-        if (ovs_idl_txn && !chassis_idx_stored) {
+        if (ovs_idl_txn) {
             store_chassis_index_if_needed(ovs_table);
-            chassis_idx_stored = true;
         }
 
         if (ovsdb_idl_has_ever_connected(ovnsb_idl_loop.idl) &&
@@ -8671,6 +8670,7 @@ main(int argc, char *argv[])
                     stopwatch_start(OFCTRL_SEQNO_RUN_STOPWATCH_NAME,
                                     time_msec());
                     ofctrl_seqno_run(ofctrl_get_cur_cfg());
+                    pinctrl_seqno_run();
                     stopwatch_stop(OFCTRL_SEQNO_RUN_STOPWATCH_NAME,
                                    time_msec());
                     stopwatch_start(IF_STATUS_MGR_RUN_STOPWATCH_NAME,
