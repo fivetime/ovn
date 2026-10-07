@@ -1,5 +1,12 @@
 Post v26.09.0
 --------------
+   - Learn ARP sender hardware address (arp.sha) and IPv6 Neighbor
+     Discovery link-layer addresses (nd.tll, nd.sll) into the FDB
+     table in addition to eth.src.  This allows VRRP virtual MACs to
+     be learned from gratuitous ARP packets and unsolicited Neighbor
+     Advertisements.
+   - Allow FDB learning on logical switch ports that have both
+     port_security and "unknown" addresses configured.
    - The native DHCPv6 server now replies to Renew and Rebind messages.
    - Added a new "lease_time" DHCPv6 option to the NB DHCP_Options table:
      the lifetime of the address that the native DHCPv6 server leases, from
