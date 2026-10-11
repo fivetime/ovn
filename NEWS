@@ -153,6 +153,19 @@ OVN v26.09.0 - xxx xx xxxx
      represent a logical router port (e.g. ovn-ic transit switch LSPs).
      Such ports are treated like type=router, including omission from
      _MC_flood_l2.
+   - Added a new "options:ic-backoff-interval-ms" key to the IC_NB_Global
+     table.  It caps how long ovn-ic postpones the next run of its
+     incremental-processing engine after the previous one finished,
+     coalescing bursts of change-driven runs into fewer, larger runs.  It
+     defaults to 0, which keeps running as soon as there is work to do.  A
+     forced full recompute is never delayed.
+   - ovn-ic now processes database changes incrementally.  Its processing
+     engine is split into one node per subsystem - availability zone,
+     gateways, transit switches and routers, datapath tunnel keys, port
+     bindings, routes, service monitors and address sets - and each node has
+     change handlers, so a change is reconciled in place instead of re-running
+     the whole ovn-ic computation.  The "inc-engine/show-stats" command
+     reports the per-node recompute counters.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
