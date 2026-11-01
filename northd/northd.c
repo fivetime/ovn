@@ -1315,6 +1315,13 @@ lsp_disable_arp_nd_rsp(const struct nbrec_logical_switch_port *nbsp)
 }
 
 static bool
+port_can_learn_fdb(const struct ovn_port *op)
+{
+    return op->nbsp && lsp_is_enabled(op->nbsp) &&
+           (op->has_unknown || lsp_is_vtep(op->nbsp));
+ }
+
+static bool
 lsp_is_type_changed(const struct sbrec_port_binding *sb,
                 const struct nbrec_logical_switch_port *nbsp,
                 bool *update_sbrec)
@@ -4367,9 +4374,7 @@ ovn_port_add_tnlid(struct ovn_port *op, uint32_t tunnel_key)
             op->od->port_key_hint = tunnel_key;
         }
 
-        /* Track the assigned tunnel_key for enabled LSP
-         * with unknown address. */
-        if (op->nbsp && lsp_is_enabled(op->nbsp) && op->has_unknown) {
+        if (port_can_learn_fdb(op)) {
             ovs_assert(ovn_add_tnlid(&op->od->fdb_ports_tnlids, tunnel_key));
         }
     }
@@ -4425,7 +4430,7 @@ ovn_port_allocate_key(struct ovn_port *op)
             return false;
         }
 
-        if (op->nbsp && lsp_is_enabled(op->nbsp) && op->has_unknown) {
+        if (port_can_learn_fdb(op)) {
             ovs_assert(ovn_add_tnlid(&op->od->fdb_ports_tnlids,
                                      op->tunnel_key));
         }
@@ -18431,9 +18436,24 @@ build_lrouter_in_ct_extract_flows(struct lflow_table *lflows,
     /* Ingress CT_EXTRACT table: Extract connection tracking fields for new
      * connections. */
     ovn_lflow_add(lflows, od, S_ROUTER_IN_CT_EXTRACT, 100,
-                  "ct.new && ip",
+                  "ct.new && ip && ip.is_frag",
                   REG_CT_PROTO " = ct_proto(); "
                   REG_CT_TP_DST " = ct_tp_dst(); next;",
+                  lflow_ref);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_CT_EXTRACT, 100,
+                  "ct.new && ip && tcp && !ip.is_frag",
+                  REG_CT_PROTO " = ip.proto; "
+                  REG_CT_TP_DST " = tcp.dst; next;",
+                  lflow_ref);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_CT_EXTRACT, 100,
+                  "ct.new && ip && udp && !ip.is_frag",
+                  REG_CT_PROTO " = ip.proto; "
+                  REG_CT_TP_DST " = udp.dst; next;",
+                  lflow_ref);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_CT_EXTRACT, 100,
+                  "ct.new && ip && sctp && !ip.is_frag",
+                  REG_CT_PROTO " = ip.proto; "
+                  REG_CT_TP_DST " = sctp.dst; next;",
                   lflow_ref);
 }
 
@@ -19717,9 +19737,24 @@ build_ls_stateful_flows(const struct ls_stateful_record *ls_stateful_rec,
      * balancers. */
     if (ls_stateful_rec->has_lb_vip) {
         ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
-                      "ct.new && ip",
+                      "ct.new && ip && ip.is_frag",
                       REG_CT_PROTO " = ct_proto(); "
                       REG_CT_TP_DST " = ct_tp_dst(); next;",
+                      ls_stateful_rec->lflow_ref);
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
+                      "ct.new && ip && tcp && !ip.is_frag",
+                      REG_CT_PROTO " = ip.proto; "
+                      REG_CT_TP_DST " = tcp.dst; next;",
+                      ls_stateful_rec->lflow_ref);
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
+                      "ct.new && ip && udp && !ip.is_frag",
+                      REG_CT_PROTO " = ip.proto; "
+                      REG_CT_TP_DST " = udp.dst; next;",
+                      ls_stateful_rec->lflow_ref);
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
+                      "ct.new && ip && sctp && !ip.is_frag",
+                      REG_CT_PROTO " = ip.proto; "
+                      REG_CT_TP_DST " = sctp.dst; next;",
                       ls_stateful_rec->lflow_ref);
     }
 

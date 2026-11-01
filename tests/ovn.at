@@ -3379,7 +3379,7 @@ for i in 1 2; do
     done
 done
 wait_for_ports_up
-OVN_WAIT_PATCH_PORT_FLOWS(["ln1" "ln2" "ln3"], ["hv1"] ["hv2"])
+check ovn-nbctl --wait=hv sync
 
 check ovn-nbctl --wait=sb sync
 ovn-sbctl dump-flows > sbflows
@@ -3546,8 +3546,7 @@ done
 
 
 wait_for_ports_up
-check ovn-nbctl --wait=sb sync
-OVN_WAIT_PATCH_PORT_FLOWS(["ln-11" "ln-21"], ["hv-1" "hv-2"])
+check ovn-nbctl --wait=hv sync
 
 ovn-sbctl dump-flows > sbflows
 AT_CAPTURE_FILE([sbflows])
@@ -3835,7 +3834,7 @@ for i in 1 2; do
     check ovn-nbctl lsp-set-port-security $lsp_name f0:00:00:00:00:0$i
 
     OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up $lsp_name` = xup])
-    OVN_WAIT_PATCH_PORT_FLOWS(["ln-$i-20"], ["hv-$i"])
+    check ovn-nbctl --wait=hv sync
 done
 
 wait_for_ports_up
@@ -4087,7 +4086,7 @@ for i in 1 2; do
 
     # Patch port might be created after ports are reported up
     # Wait for a flow outputing to patch port
-    OVN_WAIT_PATCH_PORT_FLOWS(["ln-100"], ["hv-$i"])
+    check ovn-nbctl --wait=hv sync
 done
 
 test_packet() {
@@ -4155,7 +4154,7 @@ for i in 1 2; do
 
     # Patch port might be created after ports are reported up
     # Wait for a flow outputing to patch port
-    OVN_WAIT_PATCH_PORT_FLOWS(["ln-100"], ["hv-$i"])
+    check ovn-nbctl --wait=hv sync
 done
 # create taps on fabric to check vlan encapsulation there
 for i in 1 2; do
@@ -4237,7 +4236,7 @@ for i in 1 2; do
 
     # Patch port might be created after ports are reported up
     # Wait for a flow outputing to patch port
-    OVN_WAIT_PATCH_PORT_FLOWS(["ln"], ["hv-$i"])
+    check ovn-nbctl --wait=hv sync
 done
 
 for i in 1 2; do
@@ -4459,7 +4458,7 @@ for tag in 10 20; do
         check ovn-nbctl lsp-set-port-security $lsp_name f0:00:00:00:0$i:$tag
 
         OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up $lsp_name` = xup])
-        OVN_WAIT_PATCH_PORT_FLOWS(["ln-$tag"], ["hv-$tag-$i"])
+        check ovn-nbctl --wait=hv sync
     done
 done
 wait_for_ports_up
@@ -10311,9 +10310,9 @@ AT_CAPTURE_FILE([sbflows])
 
 # Wait until the patch ports are created in hv1 and hv2 to connect br-int to br-eth0
 AT_CHECK([ovn-nbctl set logical_router lr0 options:chassis=hv1])
-OVN_WAIT_PATCH_PORT_FLOWS(["ln_port"], ["hv1"])
+check ovn-nbctl --wait=hv sync
 AT_CHECK([ovn-nbctl set logical_router lr0 options:chassis=hv2])
-OVN_WAIT_PATCH_PORT_FLOWS(["ln_port"], ["hv2"])
+check ovn-nbctl --wait=hv sync
 
 # Temporarily remove lr0 chassis
 # Wait for hv confirmation to make sure chassis is removed before we reset pcap
@@ -13038,7 +13037,6 @@ for i in 1 2; do
         > bfd$i.expected
 done
 
-OVN_WAIT_PATCH_PORT_FLOWS([ln-ext], [gw1 gw2])
 check ovn-nbctl --wait=hv sync
 
 check_bfd_packets() {
@@ -13477,8 +13475,7 @@ check as ext1 ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
 
 wait_for_ports_up
 check ovn-nbctl --wait=sb sync
-OVN_WAIT_PATCH_PORT_FLOWS(["ln-alice"], ["gw1"] ["gw2"],["gw3"])
-OVN_WAIT_PATCH_PORT_FLOWS(["ln-outside"], ["ext1"])
+check ovn-nbctl --wait=hv sync
 
 ovn-sbctl dump-flows > sbflows
 AT_CAPTURE_FILE([sbflows])
@@ -13722,7 +13719,6 @@ check as hv3 ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
 dnl Allow some time for ovn-northd and ovn-controller to catch up.
 wait_for_ports_up
 check ovn-nbctl --wait=hv sync
-OVN_WAIT_PATCH_PORT_FLOWS(["ln-outside"], ["hv3"])
 
 (echo "---------NB dump-----"
  ovn-nbctl show
@@ -13837,7 +13833,7 @@ OVN_CHECK_PACKETS_UNIQ([hv3/vif1-tx.pcap], [hv3-vif1.expected])
 as hv2 ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
 
 # Wait until the patch ports are created in hv2 to connect br-int to br-phys
-OVN_WAIT_PATCH_PORT_FLOWS(["ln-alice"], ["hv2"])
+check ovn-nbctl --wait=hv sync
 
 dnl Allow some time for ovn-controller to catch up.
 wait_for_ports_up
@@ -13909,7 +13905,6 @@ check ovn-nbctl lsp-add foo foo2 \
 # Allow some time for ovn-northd and ovn-controller to catch up.
 wait_for_ports_up
 check ovn-nbctl --wait=hv sync
-OVN_WAIT_PATCH_PORT_FLOWS(["ln-alice"], ["hv1"])
 
 : > hv1-vif2.expected
 
@@ -14009,7 +14004,7 @@ OVN_CHECK_PACKETS([hv1/snoopvif-tx.pcap], [packets])
 AT_CHECK([as hv2 ovs-vsctl set Open_vSwitch . external-ids:ovn-bridge-mappings=physnet1:br-phys])
 
 # Wait until the patch ports are created in hv2 to connect br-int to br-phys
-OVN_WAIT_PATCH_PORT_FLOWS(["ln_port"], ["hv2"])
+check ovn-nbctl --wait=hv sync
 
 # Wait for packets to be received.
 OVS_WAIT_UNTIL([test `wc -c < "hv1/snoopvif-tx.pcap"` -ge 100])
@@ -14037,7 +14032,7 @@ ovs-vsctl -- add-port br-int hv3-vif2 -- \
 AT_CHECK([as hv3 ovs-vsctl set Open_vSwitch . external-ids:ovn-bridge-mappings=physnet1:br-phys])
 
 # Wait until the patch ports are created in hv3 to connect br-int to br-phys
-OVN_WAIT_PATCH_PORT_FLOWS(["ln_port"], ["hv3"])
+check ovn-nbctl --wait=hv sync
 
 # Re-add nat-addresses option
 check ovn-nbctl lsp-set-options lrp0-rp router-port=lrp0 nat-addresses="router"
@@ -15717,7 +15712,6 @@ AT_CHECK([ovn-nbctl lsp-add-localnet-port ls0 ln_port physnet1])
 # wait for earlier changes to take effect
 wait_for_ports_up
 check ovn-nbctl --wait=hv sync
-OVN_WAIT_PATCH_PORT_FLOWS(["ln_port"], ["hv2"] ["hv3"])
 
 # reset hv1/snoopvif after hv2/br-phys_n1 and hv3/br-phys_n1 as we wait
 # for packets to be received on hv1/snoopvif-tx.
@@ -17047,8 +17041,7 @@ reset_env
 # Start port migration hv1 -> hv2: both hypervisors are now bound
 check ovn-nbctl --wait=hv lsp-set-options migrator requested-chassis=hv1,hv2
 wait_for_ports_up
-OVN_WAIT_PATCH_PORT_FLOWS(["public"], ["hv1"])
-OVN_WAIT_PATCH_PORT_FLOWS(["public"], ["hv2"])
+check ovn-nbctl --wait=hv sync
 OVN_WAIT_REMOTE_OUTPUT_FLOWS(["hv1"],["hv2"])
 OVN_WAIT_REMOTE_OUTPUT_FLOWS(["hv2"],["hv1"])
 OVN_WAIT_REMOTE_OUTPUT_FLOWS(["hv3"],["hv1"])
@@ -24087,7 +24080,7 @@ check ovn-nbctl --wait=sb sync
 #ovn-sbctl dump-flows
 for i in 1 2; do
     for j in 1 2; do
-        OVN_WAIT_PATCH_PORT_FLOWS(["ln$j"], ["hv$i"])
+        check ovn-nbctl --wait=hv sync
     done
 done
 
@@ -26325,6 +26318,649 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([IGMP/MLD querier per-port query fan-out])
+AT_KEYWORDS([IP-multicast snoop querier])
+AT_KEYWORDS([slowtest])
+
+ovn_start
+
+dnl A single chassis with a large number of local VIFs on one logical
+dnl switch.  Each port's querier query egress translation uses ~19
+dnl resubmits, so delivering the queries to all 250 local ports in a
+dnl single flood-group PACKET_OUT would exceed OVS's MAX_RESUBMITS
+dnl (4096) budget.  Instead, the querier sends one PACKET_OUT per
+dnl batch of at most 100 ports.  Verify end to end that (1) every
+dnl local port receives both the IGMP and the MLD queries, with the
+dnl right contents, and (2) the number of OFPT_PACKET_OUT messages
+dnl matches the batch count: three per query type with 250 local
+dnl ports, two with 101, one with 100.
+dnl
+dnl sim_add() starts ovs-vswitchd with -vvconn, so every OpenFlow
+dnl message received from ovn-controller is dumped to
+dnl ovs-vswitchd.log.  Counting the "received: OFPT_PACKET_OUT" log
+dnl lines therefore counts the messages the querier actually sent.
+
+n_ports=250
+
+check ovn-nbctl ls-add ls1
+
+# Create the VIF ports on ls1 in batches.
+batch=""
+for i in $(seq 1 $n_ports); do
+    batch="$batch -- lsp-add ls1 ls1-p$i"
+    if test $((i % 50)) -eq 0; then
+        check ovn-nbctl $batch
+        batch=""
+    fi
+done
+if test -n "$batch"; then
+    check ovn-nbctl $batch
+fi
+
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+
+# Create the VIFs in batches, keeping tx pcaps on a few of them.
+batch=""
+for i in $(seq 1 $n_ports); do
+    if test $i -eq 1 -o $i -eq 125 -o $i -eq $n_ports; then
+        batch="$batch -- add-port br-int hv1-vif$i -- \
+            set interface hv1-vif$i external-ids:iface-id=ls1-p$i \
+            options:tx_pcap=hv1/vif$i-tx.pcap \
+            options:rxq_pcap=hv1/vif$i-rx.pcap"
+    else
+        batch="$batch -- add-port br-int hv1-vif$i -- \
+            set interface hv1-vif$i external-ids:iface-id=ls1-p$i"
+    fi
+    if test $((i % 25)) -eq 0; then
+        check ovs-vsctl $batch
+        batch=""
+    fi
+done
+if test -n "$batch"; then
+    check ovs-vsctl $batch
+fi
+
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+# Enable multicast snooping and querier on ls1.  Use the maximum
+# query interval so that only the immediate query round fired when
+# the querier is enabled (and, later, when the interval changes)
+# happens during the test.
+check ovn-nbctl --wait=hv set Logical_Switch ls1 \
+    other_config:mcast_snoop="true" \
+    other_config:mcast_querier="true" \
+    other_config:mcast_query_interval=3600 \
+    other_config:mcast_eth_src="00:00:00:00:02:fe" \
+    other_config:mcast_ip4_src="20.0.0.254" \
+    other_config:mcast_ip6_src="fe80::fe"
+
+# Wait for pinctrl thread to be connected
+OVS_WAIT_UNTIL([grep pinctrl hv1/ovn-controller.log | grep -c connected])
+
+dp_key=$(printf "%x" $(fetch_column Datapath_Binding tunnel_key external_ids:name=ls1))
+
+AS_BOX([Querier queries are fanned out to all local ports])
+dnl Every local port has its own output flow in table 89, the last
+dnl logical egress table.  The querier sends one IGMP query and one
+dnl MLD query per port per round, so once each per-port flow has
+dnl counted both packets, every local port has received both
+dnl queries.
+OVS_WAIT_UNTIL(
+  [test $(as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY | grep -c "metadata=0x$dp_key ") -eq $n_ports \
+       -a $(as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY | grep "metadata=0x$dp_key " | grep -c "n_packets=2,") -eq $n_ports],
+  [as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY])
+
+AS_BOX([Querier query contents])
+AT_CAPTURE_FILE([exp])
+AT_CAPTURE_FILE([rcv])
+check_packets() {
+    > exp
+    > rcv
+    if test "$1" = --uniq; then
+        sort="sort -u"; shift
+    else
+        sort=sort
+    fi
+    for tuple in "$@"; do
+        set $tuple; pcap=$1 type=$2
+        echo "--- $pcap" | tee -a exp >> rcv
+        $sort "$type" >> exp
+        $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" $pcap | $sort >> rcv
+        echo | tee -a exp >> rcv
+    done
+
+    $at_diff exp rcv >/dev/null
+}
+
+> expected
+store_igmp_v3_query 0000000002fe $(ip_to_hex 20 0 0 254) 84dd expected
+store_mld_query 0000000002fe fe8000000000000000000000000000fe expected
+
+OVS_WAIT_UNTIL(
+  [check_packets --uniq 'hv1/vif1-tx.pcap expected' \
+                 'hv1/vif125-tx.pcap expected' \
+                 'hv1/vif250-tx.pcap expected'],
+  [$at_diff -F'^---' exp rcv])
+
+AS_BOX([250 local ports require three messages per query type])
+dnl One round over 250 local ports: 3 batches of IGMP + 3 batches
+dnl of MLD, i.e. 6 OFPT_PACKET_OUT messages in total.  The round is
+dnl known to be fully delivered at this point (see above), so the
+dnl count is exact.
+OVS_WAIT_UNTIL(
+  [test $(grep -c "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log) -eq 6],
+  [grep "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log])
+
+AS_BOX([101 local ports require two messages per query type])
+dnl Drop the ports above 101.  Changing the query interval triggers
+dnl an immediate next query round (see ip_mcast_snoop_configure() in
+dnl ovn-controller), now over the 101 remaining ports, i.e. two
+dnl messages per query type, four in total.
+batch=""
+for i in $(seq 102 $n_ports); do
+    batch="$batch -- lsp-del ls1-p$i"
+    if test $((i % 50)) -eq 0; then
+        check ovn-nbctl $batch
+        batch=""
+    fi
+done
+if test -n "$batch"; then
+    check ovn-nbctl $batch
+fi
+
+batch=""
+for i in $(seq 102 $n_ports); do
+    batch="$batch -- del-port br-int hv1-vif$i"
+    if test $((i % 25)) -eq 0; then
+        check ovs-vsctl $batch
+        batch=""
+    fi
+done
+if test -n "$batch"; then
+    check ovs-vsctl $batch
+fi
+
+check ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv set Logical_Switch ls1 other_config:mcast_query_interval=1800
+
+OVS_WAIT_UNTIL(
+  [test $(as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY | grep -c "metadata=0x$dp_key ") -eq 101 \
+       -a $(as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY | grep "metadata=0x$dp_key " | grep -c "n_packets=4,") -eq 101],
+  [as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY])
+
+dnl Two rounds in total: 6 messages from the 250-port round plus 2
+dnl batches of IGMP + 2 batches of MLD over the 101 remaining ports.
+OVS_WAIT_UNTIL(
+  [test $(grep -c "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log) -eq 10],
+  [grep "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log])
+
+AS_BOX([100 local ports require one message per query type])
+dnl Drop one more local port.  Changing the query interval again
+dnl triggers another immediate query round, now over the 100
+dnl remaining ports, i.e. one message per query type, two in total.
+check ovn-nbctl lsp-del ls1-p101
+check ovs-vsctl --if-exists del-port br-int hv1-vif101
+check ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv set Logical_Switch ls1 other_config:mcast_query_interval=900
+
+OVS_WAIT_UNTIL(
+  [test $(as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY | grep -c "metadata=0x$dp_key ") -eq 100 \
+       -a $(as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY | grep "metadata=0x$dp_key " | grep -c "n_packets=6,") -eq 100],
+  [as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY])
+
+dnl Three rounds in total: the 6 + 4 messages above plus 1 batch of
+dnl IGMP + 1 batch of MLD over the 100 remaining ports.
+OVS_WAIT_UNTIL(
+  [test $(grep -c "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log) -eq 12],
+  [grep "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([IGMP/MLD querier per-port query fan-out interval cadence])
+AT_KEYWORDS([IP-multicast snoop querier])
+AT_KEYWORDS([slowtest])
+
+ovn_start
+
+dnl A single chassis with two local VIFs on one logical switch.
+dnl Each querier round sends one IGMP query and one MLD query (a
+dnl single batch for both ports), so every round shows up as two
+dnl "received: OFPT_PACKET_OUT" lines in ovs-vswitchd.log, which
+dnl sim_add() starts with -vvconn.
+dnl
+dnl Verify that (1) consecutive rounds are spaced by the configured
+dnl 3s query interval, (2) extending the interval does not reset the
+dnl pending round, and (3) shortening the interval triggers an
+dnl immediate round.
+dnl
+dnl Known limitation: the interval extension is applied by the
+dnl controller asynchronously.  The assertions assume it is applied
+dnl within a couple of seconds; on a heavily loaded system an extra
+dnl round could fire and the exact count checks would fail.
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lsp-add ls1 ls1-p1
+check ovn-nbctl lsp-add ls1 ls1-p2
+
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+check ovs-vsctl add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=ls1-p1 \
+    options:tx_pcap=hv1/vif1-tx.pcap
+check ovs-vsctl add-port br-int hv1-vif2 -- \
+    set interface hv1-vif2 external-ids:iface-id=ls1-p2 \
+    options:tx_pcap=hv1/vif2-tx.pcap
+
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+# Enable multicast snooping and querier on ls1 with a short query
+# interval so that several query rounds fire during the test.
+check ovn-nbctl --wait=hv set Logical_Switch ls1 \
+    other_config:mcast_snoop="true" \
+    other_config:mcast_querier="true" \
+    other_config:mcast_query_interval=3 \
+    other_config:mcast_eth_src="00:00:00:00:02:fe" \
+    other_config:mcast_ip4_src="20.0.0.254" \
+    other_config:mcast_ip6_src="fe80::fe"
+
+# Wait for pinctrl thread to be connected
+OVS_WAIT_UNTIL([grep pinctrl hv1/ovn-controller.log | grep -c connected])
+
+dp_key=$(printf "%x" $(fetch_column Datapath_Binding tunnel_key external_ids:name=ls1))
+
+packet_out_count() {
+    grep -c "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log
+}
+packet_out_ts() {
+    dnl Prints the send time (in ms) of the $1-th OFPT_PACKET_OUT
+    dnl message in hv1/ovs-vswitchd.log.  The first field of a log
+    dnl line is the UTC timestamp with millisecond precision.
+    grep "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log \
+        | awk -F'|' -v n="$1" 'NR==n { print $1 }' \
+        | while read -r ts; do date -d "$ts" +%s%3N; done
+}
+round_time() {
+    dnl The IGMP query of round $1 is the (2n-1)-th OFPT_PACKET_OUT.
+    packet_out_ts $((2 * $1 - 1))
+}
+check_interval_gap() {
+    gap=$(( $2 - $1 ))
+    check test "$gap" -ge $3 -a "$gap" -le $4
+}
+
+AS_BOX([Query rounds follow the configured interval])
+OVS_WAIT_UNTIL(
+  [test $(packet_out_count) -ge 2],
+  [grep "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log])
+r1=$(round_time 1)
+OVS_WAIT_UNTIL(
+  [test $(packet_out_count) -ge 8],
+  [grep "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log])
+r2=$(round_time 2)
+r3=$(round_time 3)
+r4=$(round_time 4)
+
+check_interval_gap $r1 $r2 2600 3600
+check_interval_gap $r2 $r3 2600 3600
+check_interval_gap $r3 $r4 2600 3600
+total=$(( r4 - r1 ))
+check test "$total" -ge 8000 -a "$total" -le 12000
+
+AS_BOX([Extending the interval keeps the pending round])
+dnl The pending fifth round was scheduled with the old 3s interval,
+dnl so it must still fire on time even after the interval is
+dnl extended.
+check ovn-nbctl --wait=hv set Logical_Switch ls1 other_config:mcast_query_interval=3600
+
+OVS_WAIT_UNTIL(
+  [test $(packet_out_count) -ge 10],
+  [grep "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log])
+r5=$(round_time 5)
+check_interval_gap $r4 $r5 2600 4500
+
+dnl If the controller had not applied the extended interval before
+dnl the fifth round was rescheduled, a sixth round would have fired
+dnl right after it.
+sleep 4
+check test $(packet_out_count) -eq 10
+
+AS_BOX([Shortening the interval triggers an immediate round])
+check ovn-nbctl --wait=hv set Logical_Switch ls1 other_config:mcast_query_interval=1800
+
+OVS_WAIT_UNTIL(
+  [test $(packet_out_count) -eq 12],
+  [grep "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log])
+r6=$(round_time 6)
+dnl The immediate round fires well before the new 1800s interval.
+check test $(( r6 - r5 )) -le 10000
+
+OVS_WAIT_UNTIL(
+  [test $(as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY | grep -c "metadata=0x$dp_key ") -eq 2 \
+       -a $(as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY | grep "metadata=0x$dp_key " | grep -c "n_packets=12,") -eq 2],
+  [as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY])
+
+AS_BOX([Querier query contents])
+AT_CAPTURE_FILE([exp])
+AT_CAPTURE_FILE([rcv])
+check_packets() {
+    > exp
+    > rcv
+    if test "$1" = --uniq; then
+        sort="sort -u"; shift
+    else
+        sort=sort
+    fi
+    for tuple in "$@"; do
+        set $tuple; pcap=$1 type=$2
+        echo "--- $pcap" | tee -a exp >> rcv
+        $sort "$type" >> exp
+        $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" $pcap | $sort >> rcv
+        echo | tee -a exp >> rcv
+    done
+
+    $at_diff exp rcv >/dev/null
+}
+
+> expected
+store_igmp_v3_query 0000000002fe $(ip_to_hex 20 0 0 254) 84dd expected
+store_mld_query 0000000002fe fe8000000000000000000000000000fe expected
+
+OVS_WAIT_UNTIL(
+  [check_packets --uniq 'hv1/vif1-tx.pcap expected' \
+                 'hv1/vif2-tx.pcap expected'],
+  [$at_diff -F'^---' exp rcv])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([IGMP/MLD querier per-port query fan-out first query at controller startup])
+AT_KEYWORDS([IP-multicast snoop querier])
+AT_KEYWORDS([slowtest])
+
+ovn_start
+
+dnl Multicast snooping and the querier are configured on ls1 before
+dnl the controller starts.  When the VIF on ls1 is bound, the
+dnl querier state for the switch is created and must fire an
+dnl immediate first query round, without waiting for the (maximum)
+dnl query interval to elapse.
+dnl
+dnl Known limitations: (1) the immediate round is observed through
+dnl the OFPT_PACKET_OUT messages it generates; (2) the first round
+dnl may fire before the VIF's egress OpenFlow pipeline is installed,
+dnl in which case its packets are dropped on the way to the port.
+dnl The arrival and content checks therefore run against a second
+dnl round, triggered immediately by shortening the query interval,
+dnl whose packets are certain to reach the port.
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lsp-add ls1 ls1-p1
+
+# Enable multicast snooping and querier on ls1 before the controller
+# starts.  Use the maximum query interval so that, if any query round
+# fires during the test, it must be the immediate first one.
+check ovn-nbctl set Logical_Switch ls1 \
+    other_config:mcast_snoop="true" \
+    other_config:mcast_querier="true" \
+    other_config:mcast_query_interval=3600 \
+    other_config:mcast_eth_src="00:00:00:00:02:fe" \
+    other_config:mcast_ip4_src="20.0.0.254" \
+    other_config:mcast_ip6_src="fe80::fe"
+
+dnl Wait until northd has processed the snoop configuration.
+OVS_WAIT_UNTIL([test -n "$(fetch_column Datapath_Binding _uuid external_ids:name=ls1)"])
+dp_uuid=$(fetch_column Datapath_Binding _uuid external_ids:name=ls1)
+wait_column 3600 sb:IP_Multicast query_interval datapath=$dp_uuid
+
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+check ovs-vsctl add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=ls1-p1 \
+    options:tx_pcap=hv1/vif1-tx.pcap
+
+wait_for_ports_up
+
+# Wait for pinctrl thread to be connected
+OVS_WAIT_UNTIL([grep pinctrl hv1/ovn-controller.log | grep -c connected])
+
+packet_out_count() {
+    grep -c "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log
+}
+
+pcap_count() {
+    $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap | wc -l
+}
+
+AS_BOX([The first query round fires immediately])
+dnl One IGMP query and one MLD query are sent without waiting for
+dnl the (maximum) query interval to elapse.
+OVS_WAIT_UNTIL(
+  [test $(packet_out_count) -eq 2],
+  [grep "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log])
+
+dnl The first round's packets may not have reached the port yet (or
+dnl may be dropped entirely if the egress pipeline is not installed);
+dnl record the captured count either way.
+first_round_count=$(pcap_count)
+
+dnl Let the VIF's egress pipeline settle, then trigger an immediate
+dnl second round by shortening the interval.  Its packets must
+dnl reach the port.
+sleep 2
+check ovn-nbctl --wait=hv set Logical_Switch ls1 other_config:mcast_query_interval=1800
+
+OVS_WAIT_UNTIL(
+  [test $(packet_out_count) -eq 4],
+  [grep "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log])
+
+dnl The second round must add its two queries to the capture, so the
+dnl two sets of packets arrive separately.
+OVS_WAIT_UNTIL(
+  [test $(pcap_count) -ge $((first_round_count + 2))],
+  [echo "pcap has $(pcap_count) packets, expected at least $((first_round_count + 2))"])
+
+AS_BOX([Querier query contents])
+AT_CAPTURE_FILE([exp])
+AT_CAPTURE_FILE([rcv])
+check_packets() {
+    > exp
+    > rcv
+    if test "$1" = --uniq; then
+        sort="sort -u"; shift
+    else
+        sort=sort
+    fi
+    for tuple in "$@"; do
+        set $tuple; pcap=$1 type=$2
+        echo "--- $pcap" | tee -a exp >> rcv
+        $sort "$type" >> exp
+        $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" $pcap | $sort >> rcv
+        echo | tee -a exp >> rcv
+    done
+
+    $at_diff exp rcv >/dev/null
+}
+
+> expected
+store_igmp_v3_query 0000000002fe $(ip_to_hex 20 0 0 254) 84dd expected
+store_mld_query 0000000002fe fe8000000000000000000000000000fe expected
+
+OVS_WAIT_UNTIL(
+  [check_packets --uniq 'hv1/vif1-tx.pcap expected'],
+  [$at_diff -F'^---' exp rcv])
+
+dnl The next round is a full query interval away.
+sleep 10
+check test $(packet_out_count) -eq 4
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([IGMP/MLD querier per-port query fan-out empty flood group])
+AT_KEYWORDS([IP-multicast snoop querier])
+AT_KEYWORDS([slowtest])
+
+ovn_start
+
+dnl A switch connected to a router through a static router port.
+dnl The router port belongs to the _MC_flood group, but its queries
+dnl always leave through the remote output and never to a local
+dnl port, so the switch's local flood port list stays empty.  A VIF
+dnl with receive_multicast disabled is claimed by the chassis (which
+dnl makes the switch a local datapath) without joining the
+dnl _MC_flood group.
+dnl
+dnl With an empty (but published) flood port list the querier must
+dnl not send queries and must reschedule the next round at the full
+dnl query interval, not the 1s unpublished retry.  Adding a port to
+dnl the flood group must not trigger an immediate round; shortening
+dnl the interval does.
+dnl
+dnl Known limitation: the "no queries sent" phases rely on the flood
+dnl port list being published before the querier state is created,
+dnl which holds in the current implementation because the port list
+dnl is published within the same controller loop iteration in which
+dnl the switch becomes local.
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lrp1 f0:00:00:00:00:f1 192.168.1.1/24
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lsp-add ls1 ls1-lrp1
+check ovn-nbctl set Logical_Switch_Port ls1-lrp1 \
+    type=router \
+    options:router-port=lrp1 \
+    addresses=router
+
+# The VIF makes ls1 a local datapath on hv1 without joining the
+# _MC_flood group.
+check ovn-nbctl lsp-add ls1 ls1-p1
+check ovn-nbctl set Logical_Switch_Port ls1-p1 options:receive_multicast=false
+
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+check ovs-vsctl add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=ls1-p1
+
+wait_for_ports_up
+
+# Enable multicast snooping and querier on ls1 with the maximum
+# query interval.
+check ovn-nbctl --wait=hv set Logical_Switch ls1 \
+    other_config:mcast_snoop="true" \
+    other_config:mcast_querier="true" \
+    other_config:mcast_query_interval=3600 \
+    other_config:mcast_eth_src="00:00:00:00:02:fe" \
+    other_config:mcast_ip4_src="20.0.0.254" \
+    other_config:mcast_ip6_src="fe80::fe"
+
+# Wait for pinctrl thread to be connected
+OVS_WAIT_UNTIL([grep pinctrl hv1/ovn-controller.log | grep -c connected])
+
+dp_key=$(printf "%x" $(fetch_column Datapath_Binding tunnel_key external_ids:name=ls1))
+
+packet_out_count() {
+    grep -c "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log
+}
+
+AS_BOX([No queries are sent while the flood group has no local ports])
+dnl The first query round finds an empty (published) local flood
+dnl port list and reschedules at the full interval; well before the
+dnl next due time no queries may have been sent.
+sleep 8
+check test $(packet_out_count) -eq 0
+
+AS_BOX([Adding a port to the flood group does not trigger a round])
+dnl Add a regular VIF.  It joins the _MC_flood group, so the flood
+dnl port list is no longer empty, but the pending round is still a
+dnl full interval away.
+check ovn-nbctl lsp-add ls1 ls1-p2
+check ovs-vsctl add-port br-int hv1-vif2 -- \
+    set interface hv1-vif2 external-ids:iface-id=ls1-p2 \
+    options:tx_pcap=hv1/vif2-tx.pcap
+wait_for_ports_up
+
+sleep 8
+check test $(packet_out_count) -eq 0
+
+AS_BOX([Shortening the interval triggers an immediate round])
+check ovn-nbctl --wait=hv set Logical_Switch ls1 other_config:mcast_query_interval=1800
+
+OVS_WAIT_UNTIL(
+  [test $(packet_out_count) -eq 2],
+  [grep "received: OFPT_PACKET_OUT" hv1/ovs-vswitchd.log])
+
+dnl Both queries went to the new port only: the VIF flow is the only
+dnl flow of the datapath that counts packets (the router port's
+dnl flows do not receive the queries).
+OVS_WAIT_UNTIL(
+  [test $(as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY | grep "metadata=0x$dp_key " | grep -c "n_packets=2,") -eq 1],
+  [as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOG_TO_PHY])
+
+AS_BOX([Querier query contents])
+AT_CAPTURE_FILE([exp])
+AT_CAPTURE_FILE([rcv])
+check_packets() {
+    > exp
+    > rcv
+    if test "$1" = --uniq; then
+        sort="sort -u"; shift
+    else
+        sort=sort
+    fi
+    for tuple in "$@"; do
+        set $tuple; pcap=$1 type=$2
+        echo "--- $pcap" | tee -a exp >> rcv
+        $sort "$type" >> exp
+        $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" $pcap | $sort >> rcv
+        echo | tee -a exp >> rcv
+    done
+
+    $at_diff exp rcv >/dev/null
+}
+
+> expected
+store_igmp_v3_query 0000000002fe $(ip_to_hex 20 0 0 254) 84dd expected
+store_mld_query 0000000002fe fe8000000000000000000000000000fe expected
+
+OVS_WAIT_UNTIL(
+  [check_packets --uniq 'hv1/vif2-tx.pcap expected'],
+  [$at_diff -F'^---' exp rcv])
+
+dnl The next round is a full query interval away.
+sleep 10
+check test $(packet_out_count) -eq 2
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([unixctl socket])
 ovn_start
 
@@ -26531,8 +27167,7 @@ m4_define([DVR_N_S_ARP_HANDLING],
    check ovn-nbctl lrp-set-gateway-chassis router-to-underlay hv3
    wait_for_ports_up
    check ovn-nbctl --wait=sb sync
-   OVN_WAIT_PATCH_PORT_FLOWS(["ln1"] ["ln2"], ["hv1"] ["hv2"] ["hv3"])
-   OVN_WAIT_PATCH_PORT_FLOWS(["ln4"], ["hv4"])
+   check ovn-nbctl --wait=hv sync
 
    wait_row_count Port_Binding 1 logical_port=cr-router-to-underlay
 
@@ -26756,8 +27391,7 @@ m4_define([DVR_N_S_PING],
 
    wait_for_ports_up
    check ovn-nbctl --wait=sb sync
-   OVN_WAIT_PATCH_PORT_FLOWS(["ln1"] ["ln2"], ["hv1"] ["hv2"] ["hv3"])
-   OVN_WAIT_PATCH_PORT_FLOWS(["ln4"], ["hv4"])
+   check ovn-nbctl --wait=hv sync
 
    OVN_POPULATE_ARP
 
@@ -27495,8 +28129,7 @@ check ovn-nbctl lrp-set-redirect-type router-to-underlay bridged
 wait_for_ports_up
 check ovn-nbctl --wait=sb sync
 
-OVN_WAIT_PATCH_PORT_FLOWS(["ln1"] ["ln2"] ["ln3"], ["hv1"] ["hv2"] ["hv3"])
-OVN_WAIT_PATCH_PORT_FLOWS(["ln4"], ["hv4"])
+check ovn-nbctl --wait=hv sync
 
 OVN_POPULATE_ARP
 
@@ -40585,7 +41218,7 @@ for i in 1 2; do
 
     # Patch port might be created after ports are reported up
     # Wait for a flow outputing to patch port
-    OVN_WAIT_PATCH_PORT_FLOWS(["public0"], ["hv-$i"])
+    check ovn-nbctl --wait=hv sync
 done
 
 check ovn-nbctl set Logical_Switch_Port lsp1 options:qos_min_rate=200000
@@ -41103,14 +41736,19 @@ check ovn-nbctl --wait=hv sync
 
 sleep_ovsdb hv1
 
-# Do following operations through one nbctl command
-# Otherwise, they would probably result in multiple sb updates to ovn-controller
-# As ovsdb is sleeping those multiple updates would resulti in requests to ovsdb being
-# postponed as ovsdb becomes ro.
-# Hence, patch port creation would be delayed after ovsdb becomes rw.
-check ovn-nbctl --wait=hv lsp-add-localnet-port ls1 ln1 phys
+# Create a localnet port and wait for ovn-controller to process the change.
+# --wait=hv cannot be used here because hv1's ovsdb is asleep.
+# Make sure ovn-controller has not updated nb_cfg.
+runtime_data_runs=$(as hv1 ovn-appctl -t ovn-controller inc-engine/show-stats runtime_data compute)
+nb_cfg="$(fetch_column nb:NB_Global nb_cfg)"
 
-# Controller should now have created the patch port, but is not yet notified of the ofport of those interfaces
+check ovn-nbctl --wait=sb lsp-add-localnet-port ls1 ln1 phys
+
+OVS_WAIT_UNTIL([test $(as hv1 ovn-appctl -t ovn-controller inc-engine/show-stats runtime_data compute) -gt $runtime_data_runs])
+check_row_count Chassis_Private 1 name=hv1 nb_cfg="${nb_cfg}"
+
+# Controller should now have sent transaction to create the patch port, but it
+# has not yet been received by ovsdb-server.
 sleep_controller hv1
 wake_up_ovsdb hv1
 check as hv1 ovs-vsctl remove Interface vif1 external_ids iface-id
@@ -41913,7 +42551,7 @@ as hv1 check ovs-vsctl set Open_vSwitch . external-ids:garp-max-timeout-sec=2
 
 # Wait until the patch ports are created in hv1 to connect br-int to br-eth0
 check ovn-nbctl set logical_router lr0 options:chassis=hv1
-OVN_WAIT_PATCH_PORT_FLOWS(["ln_port"], ["hv1"])
+check ovn-nbctl --wait=hv sync
 
 # sleep for 12s to get a garp every ~ 2s
 sleep 12
@@ -44874,7 +45512,7 @@ AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_PHY_TO_LOG | grep -v 
 # Add localnet port to sw0
 check ovn-nbctl --wait=hv lsp-add-localnet-port sw0 ln-sw0 physnet1 -- set logical_switch_port ln-sw0 tag_request=100
 
-OVN_WAIT_PATCH_PORT_FLOWS(["ln-sw0"], ["hv1"])
+check ovn-nbctl --wait=hv sync
 AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_PHY_TO_LOG | grep -v NXST_FLOW | grep "in_port=" | grep -v "in_port=$of1" | grep -v "in_port=$of2" | wc -l], [0], [dnl
 3
 ])
@@ -48131,6 +48769,82 @@ AT_CHECK([grep -q $igmp_packet tx_packets.txt], [1])
 # Check if ovs did prevent any loop.
 AT_CHECK([grep "skipping output to input port" \
     hv1/ovs-vswitchd.log], [1])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([--wait=hv waits for patch port flows])
+
+ovn_start
+
+check ovn-nbctl ls-add ls1
+net_add n
+
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+ovn_attach n br-phys 192.168.0.1
+
+check ovn-nbctl lsp-add ls1 lsp1
+check as hv1 ovs-vsctl --no-wait -- add-port br-int vif1 \
+                    -- set Interface vif1 external_ids:iface-id=lsp1 \
+                    -- set Interface vif1 type=internal
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+n_flows=$(ovs-ofctl dump-flows br-int | wc -l)
+nb_cfg=$(fetch_column nb:NB_Global nb_cfg)
+
+sleep_ovsdb hv1
+
+# Add a localnet port.  ovn-controller will try to create patch ports, but
+# ovsdb-server is asleep so the transaction cannot commit.
+check ovn-nbctl --wait=sb lsp-add-localnet-port ls1 ln1 phys
+
+# Wait for ovn-controller to process the localnet port change before
+# pausing ovs-vswitchd.
+OVS_WAIT_UNTIL([test "$(ovs-ofctl dump-flows br-int | wc -l)" -gt $n_flows])
+
+# Pause ovs-vswitchd so it cannot assign ofport when ovsdb wakes up.
+sleep_ovs hv1
+wake_up_ovsdb hv1
+
+# ovn-controller is now notified about patch port creation, but
+# ovs-vswitchd is asleep so ofport is not assigned.  --wait=hv must
+# not succeed yet.
+if ! ovn-nbctl --timeout=1 --wait=hv sync; then
+    wake_up_ovs hv1
+fi
+
+check ovn-nbctl --wait=hv sync
+
+# Verify that nb_cfg has advanced past the value from before the localnet port
+# was added.
+check_row_count Chassis_Private 1 name=hv1 nb_cfg\>${nb_cfg}
+
+# Pause ovn-controller so we can inspect the flow table.
+sleep_controller hv1
+wake_up_ovs hv1
+
+# Verify that the patch port has an ofport and a corresponding flow.
+check ovs-vsctl wait-until Interface patch-br-int-to-ln1 "ofport>0"
+ofport=$(ovs-vsctl --bare --columns ofport \
+    find Interface name=patch-br-int-to-ln1)
+AT_CHECK([ovs-ofctl dump-flows br-int table=OFTABLE_PHY_TO_LOG \
+    | grep -q in_port=$ofport], [0], [])
+
+wake_up_controller hv1
+
+# Delete the localnet port and verify --wait=hv waits for cleanup.
+check ovn-nbctl --wait=hv lsp-del ln1
+
+# Verify that the patch port and its flow are gone.
+AT_CHECK([ovs-vsctl show | grep -c patch-br-int-to-ln1], [1], [0
+])
+AT_CHECK([ovs-ofctl dump-flows br-int table=OFTABLE_PHY_TO_LOG \
+    | grep in_port=$ofport], [1], [])
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP

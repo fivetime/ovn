@@ -96,6 +96,7 @@
 #include "route-exchange.h"
 #include "route-table.h"
 #include "garp_rarp.h"
+#include "ha-chassis.h"
 #include "host-if-monitor.h"
 #include "neighbor.h"
 #include "neighbor-exchange.h"
@@ -176,6 +177,16 @@ struct controller_engine_ctx {
     struct if_status_mgr *if_mgr;
     const unsigned int *ovnsb_expected_cond_seqno;
     const bool *sb_monitor_all;
+    /* True once every table that the current monitor conditions request has
+     * been fully received (the SB condition seqno has caught up).  The
+     * route-exchange node uses this to defer its destructive kernel sync
+     * until the data it relies on is complete. */
+    bool sb_all_data_loaded;
+    /* True once the Advertised_Route monitor condition covers the local
+     * route-exchange datapaths (or, in monitor-all mode, everything).  It is
+     * false for the initial empty condition that is used before any local
+     * datapath is known. */
+    bool sb_ar_condition_scoped;
 };
 
 /* Pending packet to be injected into connected OVS. */
@@ -360,11 +371,13 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
         sbrec_port_binding_add_clause_type(&pb, OVSDB_F_EQ, "l2gateway");
         sbrec_port_binding_add_clause_type(&pb, OVSDB_F_EQ, "l3gateway");
 
-        /* Monitor all advertised routes during startup.
-         * Otherwise, once we claim a port on startup we do not yet know the
-         * routes to advertise and might wrongly delete already installed
-         * ones. */
-        ovsdb_idl_condition_add_clause_true(&ar);
+        /* Do not monitor any Advertised_Route rows during startup. The
+         * route-exchange node defers its destructive kernel sync until it has
+         * seen the initial dump of the advertised routes of the local
+         * route-exchange datapaths, so there is no risk of deleting routes
+         * we installed previously. Once local datapaths are known the
+         * condition is scoped to them (below), which avoids pulling the whole
+         * cluster's advertised routes on startup. */
     }
     if (local_ifaces) {
         const char *name;
@@ -772,6 +785,11 @@ update_sb_db(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
             update_sb_monitors(ovnsb_idl, NULL, NULL, NULL, NULL, true);
         if (sb_cond_seqno) {
             *sb_cond_seqno = next_cond_seqno;
+        }
+        /* In monitor-all mode the Advertised_Route condition matches
+         * everything, so it already covers the local datapaths. */
+        if (ctx) {
+            ctx->sb_ar_condition_scoped = true;
         }
     }
     if (monitor_all_p) {
@@ -1356,6 +1374,10 @@ struct ed_type_runtime_data {
      */
     struct related_lports related_lports;
     struct sset active_tunnels;
+    /* HA chassis groups that contain the local chassis and the subset of
+     * them for which the local chassis is the active one. */
+    struct uuidset local_ha_groups;
+    struct uuidset active_ha_groups;
 
     /* runtime data engine private data. */
     struct hmap qos_map;
@@ -1422,15 +1444,30 @@ struct ed_type_runtime_data {
  * | qos_map          | engine (used only in binding.c) and hence there  |
  * |                  | there is no need to track.                       |
  *  ---------------------------------------------------------------------
- * |                  | Active tunnels is built in the                   |
+ * | active_tunnels   | Active tunnels is built in the                   |
  * |                  | bfd_calculate_active_tunnels() for the tunnel    |
- * |                  | OVS interfaces. Any changes to non VIF OVS       |
- * |                  | interfaces results in triggering the full        |
- * | active_tunnels   | recompute of runtime data engine and hence there |
- * |                  | the tracked data doesn't track it. When we       |
- * |                  | support handling changes to non VIF OVS          |
- * |                  | interfaces we need to track the changes to the   |
- * |                  | active tunnels.                                  |
+ * |                  | OVS interfaces.  Its consumers only use it to    |
+ * |                  | find out whether the local chassis is the active |
+ * |                  | chassis of an HA chassis group.  If the local    |
+ * |                  | chassis belongs to an HA chassis group, changes  |
+ * |                  | to the tunnel OVS interfaces that don't change   |
+ * |                  | active_ha_groups are handled without changing    |
+ * |                  | any other runtime data.  Any other change to non |
+ * |                  | VIF OVS interfaces triggers the full recompute   |
+ * |                  | of runtime data engine and hence the tracked     |
+ * |                  | data doesn't track it.                           |
+ *  ---------------------------------------------------------------------
+ * | local_ha_groups  | HA chassis groups that contain the local chassis |
+ * | active_ha_groups | and the ones for which it is the active chassis. |
+ * |                  | New and deleted groups and changes to the        |
+ * |                  | reference chassis of the groups that don't       |
+ * |                  | change active_ha_groups are handled without      |
+ * |                  | changing any other runtime data.  Any other      |
+ * |                  | change to a group that contains or contained the |
+ * |                  | local chassis, or that is referenced by a port   |
+ * |                  | binding of a local datapath, triggers the full   |
+ * |                  | recompute of runtime data engine and hence the   |
+ * |                  | tracked data doesn't track them.                 |
  *  ---------------------------------------------------------------------
  *
  */
@@ -1456,6 +1493,8 @@ en_runtime_data_init(struct engine_node *node OVS_UNUSED,
     simap_init(&data->local_lports);
     related_lports_init(&data->related_lports);
     sset_init(&data->active_tunnels);
+    uuidset_init(&data->local_ha_groups);
+    uuidset_init(&data->active_ha_groups);
     hmap_init(&data->qos_map);
     smap_init(&data->local_iface_ids);
     local_binding_data_init(&data->lbinding_data);
@@ -1476,6 +1515,8 @@ en_runtime_data_cleanup(void *data)
     simap_destroy(&rt_data->local_lports);
     related_lports_destroy(&rt_data->related_lports);
     sset_destroy(&rt_data->active_tunnels);
+    uuidset_destroy(&rt_data->local_ha_groups);
+    uuidset_destroy(&rt_data->active_ha_groups);
     destroy_qos_map(&rt_data->qos_map);
     smap_destroy(&rt_data->local_iface_ids);
     local_datapaths_destroy(&rt_data->local_datapaths);
@@ -1578,6 +1619,93 @@ init_binding_ctx(struct engine_node *node,
     b_ctx_out->if_mgr = ctrl_ctx->if_mgr;
     b_ctx_out->localnet_learn_fdb = rt_data->localnet_learn_fdb;
     b_ctx_out->localnet_learn_fdb_changed = false;
+    b_ctx_out->tunnel_ifaces_changed = false;
+}
+
+/* Calculates the set of 'active_tunnels', the set of HA chassis groups
+ * that contain the local chassis ('local_ha_groups') and the subset of
+ * them for which the local chassis is the active one ('active_ha_groups').
+ */
+static void
+runtime_data_calculate_active_ha(struct engine_node *node,
+                                 const struct binding_ctx_in *b_ctx_in,
+                                 struct sset *active_tunnels,
+                                 struct uuidset *local_ha_groups,
+                                 struct uuidset *active_ha_groups)
+{
+    struct ed_type_ofctrl_is_connected *ed_ofctrl_is_connected =
+        engine_get_input_data("ofctrl_is_connected", node);
+    if (ed_ofctrl_is_connected->connected) {
+        /* Calculate the active tunnels only if have an an active
+         * OpenFlow connection to br-int.
+         * If we don't have a connection to br-int, it could mean
+         * ovs-vswitchd is down for some reason and the BFD status
+         * in the Interface rows could be stale. So its better to
+         * consider 'active_tunnels' set to be empty if it's not
+         * connected. */
+        bfd_calculate_active_tunnels(b_ctx_in->br_int, active_tunnels);
+    }
+
+    const struct sbrec_ha_chassis_group_table *ha_ch_grp_table =
+        EN_OVSDB_GET(engine_get_input("SB_ha_chassis_group", node));
+    ha_chassis_groups_collect_local(ha_ch_grp_table, active_tunnels,
+                                    b_ctx_in->chassis_rec, local_ha_groups,
+                                    active_ha_groups);
+}
+
+static bool
+ha_groups_equal(const struct uuidset *a, const struct uuidset *b)
+{
+    if (uuidset_count(a) != uuidset_count(b)) {
+        return false;
+    }
+
+    const struct uuidset_node *node;
+    UUIDSET_FOR_EACH (node, a) {
+        if (!uuidset_contains(b, &node->uuid)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Recalculates the active tunnels.  Returns false if the local chassis
+ * doesn't belong to any HA chassis group or if this changes the set of HA
+ * chassis groups for which the local chassis is the active one, in which
+ * case the runtime data must be recomputed.  Otherwise updates
+ * 'rt_data->active_tunnels' and returns true. */
+static bool
+runtime_data_handle_active_tunnels(struct engine_node *node,
+                                   struct ed_type_runtime_data *rt_data,
+                                   const struct binding_ctx_in *b_ctx_in)
+{
+    if (uuidset_is_empty(&rt_data->local_ha_groups)) {
+        /* The local chassis is not an HA chassis, so BFD is enabled on its
+         * tunnels only while it is a reference chassis, i.e., while it has
+         * datapaths of distributed gateway ports local.  Recompute in that
+         * case, as removing datapaths that are no longer local is not
+         * supported incrementally. */
+        return false;
+    }
+
+    struct sset active_tunnels = SSET_INITIALIZER(&active_tunnels);
+    struct uuidset local_ha_groups = UUIDSET_INITIALIZER(&local_ha_groups);
+    struct uuidset active_ha_groups =
+        UUIDSET_INITIALIZER(&active_ha_groups);
+
+    runtime_data_calculate_active_ha(node, b_ctx_in, &active_tunnels,
+                                     &local_ha_groups, &active_ha_groups);
+
+    bool handled = ha_groups_equal(&active_ha_groups,
+                                  &rt_data->active_ha_groups);
+    if (handled) {
+        sset_swap(&active_tunnels, &rt_data->active_tunnels);
+    }
+
+    sset_destroy(&active_tunnels);
+    uuidset_destroy(&local_ha_groups);
+    uuidset_destroy(&active_ha_groups);
+    return handled;
 }
 
 static enum engine_node_state
@@ -1602,6 +1730,8 @@ en_runtime_data_run(struct engine_node *node, void *data)
         simap_destroy(local_lports);
         related_lports_destroy(&rt_data->related_lports);
         sset_destroy(active_tunnels);
+        uuidset_clear(&rt_data->local_ha_groups);
+        uuidset_clear(&rt_data->active_ha_groups);
         destroy_qos_map(&rt_data->qos_map);
         smap_destroy(&rt_data->local_iface_ids);
         hmap_init(local_datapaths);
@@ -1621,18 +1751,9 @@ en_runtime_data_run(struct engine_node *node, void *data)
     struct binding_ctx_out b_ctx_out;
     init_binding_ctx(node, rt_data, &b_ctx_in, &b_ctx_out);
 
-    struct ed_type_ofctrl_is_connected *ed_ofctrl_is_connected =
-        engine_get_input_data("ofctrl_is_connected", node);
-    if (ed_ofctrl_is_connected->connected) {
-        /* Calculate the active tunnels only if have an an active
-         * OpenFlow connection to br-int.
-         * If we don't have a connection to br-int, it could mean
-         * ovs-vswitchd is down for some reason and the BFD status
-         * in the Interface rows could be stale. So its better to
-         * consider 'active_tunnels' set to be empty if it's not
-         * connected. */
-        bfd_calculate_active_tunnels(b_ctx_in.br_int, active_tunnels);
-    }
+    runtime_data_calculate_active_ha(node, &b_ctx_in, active_tunnels,
+                                     &rt_data->local_ha_groups,
+                                     &rt_data->active_ha_groups);
 
     binding_run(&b_ctx_in, &b_ctx_out);
     rt_data->localnet_learn_fdb = b_ctx_out.localnet_learn_fdb;
@@ -1723,12 +1844,137 @@ runtime_data_ovs_interface_shadow_handler(struct engine_node *node, void *data)
         return EN_UNHANDLED;
     }
 
+    if (b_ctx_out.tunnel_ifaces_changed &&
+        !runtime_data_handle_active_tunnels(node, rt_data, &b_ctx_in)) {
+        return EN_UNHANDLED;
+    }
+
     if (b_ctx_out.local_lports_changed) {
         result = EN_HANDLED_UPDATED;
         rt_data->local_lports_changed = b_ctx_out.local_lports_changed;
     }
 
     return result;
+}
+
+/* Returns true if the only change to the tracked 'ha_ch_grp' is an update
+ * of its 'ref_chassis' column. */
+static bool
+ha_chassis_group_only_ref_chassis_updated(
+    const struct sbrec_ha_chassis_group *ha_ch_grp)
+{
+    if (!sbrec_ha_chassis_group_is_updated(
+            ha_ch_grp, SBREC_HA_CHASSIS_GROUP_COL_REF_CHASSIS)) {
+        return false;
+    }
+
+    for (size_t i = 0; i < SBREC_HA_CHASSIS_GROUP_N_COLUMNS; i++) {
+        if (i != SBREC_HA_CHASSIS_GROUP_COL_REF_CHASSIS &&
+            sbrec_ha_chassis_group_is_updated(ha_ch_grp, i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Returns true if a port binding of any of the 'local_datapaths'
+ * references 'ha_ch_grp'. */
+static bool
+ha_chassis_group_is_referenced_locally(
+    const struct sbrec_ha_chassis_group *ha_ch_grp,
+    const struct hmap *local_datapaths,
+    struct ovsdb_idl_index *sbrec_port_binding_by_datapath)
+{
+    struct sbrec_port_binding *target =
+        sbrec_port_binding_index_init_row(sbrec_port_binding_by_datapath);
+    bool found = false;
+
+    const struct local_datapath *ld;
+    HMAP_FOR_EACH (ld, hmap_node, local_datapaths) {
+        sbrec_port_binding_index_set_datapath(target, ld->datapath);
+
+        const struct sbrec_port_binding *pb;
+        SBREC_PORT_BINDING_FOR_EACH_EQUAL (pb, target,
+                                           sbrec_port_binding_by_datapath) {
+            if (pb->ha_chassis_group == ha_ch_grp) {
+                found = true;
+                goto out;
+            }
+        }
+    }
+
+out:
+    sbrec_port_binding_index_destroy_row(target);
+    return found;
+}
+
+static enum engine_input_handler_result
+runtime_data_sb_ha_chassis_group_handler(struct engine_node *node,
+                                         void *data)
+{
+    struct ed_type_runtime_data *rt_data = data;
+    struct binding_ctx_in b_ctx_in;
+    struct binding_ctx_out b_ctx_out;
+    init_binding_ctx(node, rt_data, &b_ctx_in, &b_ctx_out);
+
+    const struct sbrec_ha_chassis_group_table *ha_ch_grp_table =
+        EN_OVSDB_GET(engine_get_input("SB_ha_chassis_group", node));
+    const struct sbrec_ha_chassis_group *ha_ch_grp;
+    SBREC_HA_CHASSIS_GROUP_TABLE_FOR_EACH_TRACKED (ha_ch_grp,
+                                                   ha_ch_grp_table) {
+        const struct uuid *uuid = &ha_ch_grp->header_.uuid;
+
+        if (sbrec_ha_chassis_group_is_deleted(ha_ch_grp)) {
+            /* Port bindings referencing a deleted group are handled by the
+             * SB_port_binding handler. */
+            uuidset_find_and_delete(&rt_data->local_ha_groups, uuid);
+            uuidset_find_and_delete(&rt_data->active_ha_groups, uuid);
+            continue;
+        }
+
+        bool is_local = ha_chassis_group_contains(ha_ch_grp,
+                                                  b_ctx_in.chassis_rec);
+        bool is_active = is_local &&
+                         ha_chassis_group_is_active(ha_ch_grp,
+                                                    &rt_data->active_tunnels,
+                                                    b_ctx_in.chassis_rec);
+        if (sbrec_ha_chassis_group_is_new(ha_ch_grp)) {
+            /* Port bindings referencing a new group are handled by the
+             * SB_port_binding handler. */
+            if (is_local) {
+                uuidset_insert(&rt_data->local_ha_groups, uuid);
+            }
+            if (is_active) {
+                uuidset_insert(&rt_data->active_ha_groups, uuid);
+            }
+            continue;
+        }
+
+        if (!ha_chassis_group_only_ref_chassis_updated(ha_ch_grp)) {
+            /* The local datapaths and the physical flows of the port
+             * bindings referencing the group depend on its HA chassis.
+             * Only care about the groups relevant to the local chassis. */
+            if (is_local ||
+                uuidset_contains(&rt_data->local_ha_groups, uuid) ||
+                ha_chassis_group_is_referenced_locally(
+                    ha_ch_grp, &rt_data->local_datapaths,
+                    b_ctx_in.sbrec_port_binding_by_datapath)) {
+                return EN_UNHANDLED;
+            }
+            continue;
+        }
+
+        /* Changes to the reference chassis, which are frequent as they
+         * follow the workloads, can't change whether the group contains
+         * the local chassis but they can change whether it is the active
+         * one. */
+        if (is_active != uuidset_contains(&rt_data->active_ha_groups,
+                                          uuid)) {
+            return EN_UNHANDLED;
+        }
+    }
+
+    return EN_HANDLED_UNCHANGED;
 }
 
 static enum engine_input_handler_result
@@ -5739,6 +5985,22 @@ struct ed_type_route_exchange {
     bool sb_changes_pending;
     /* What the last run learned from the kernel routing tables. */
     struct route_exchange_state *state;
+    /* True once the initial Advertised_Route dump for the local
+     * route-exchange datapaths is complete.  Until then the destructive
+     * kernel sync is deferred so that we cannot delete routes that we
+     * installed previously but that are not yet present in our (partial)
+     * view of the SB database. */
+    bool initial_routes_loaded;
+    /* True once the first armed kernel sync has run.  Unlike
+     * initial_routes_loaded, it is not cleared when the local
+     * route-exchange datapath set changes or on SB reconnect, so the
+     * sync can still run (to clean up VRFs and routes) once the set
+     * becomes empty.  The start-up danger window in which an empty
+     * Advertised_Route view would delete routes installed before the
+     * restart is guarded by sb_all_data_loaded, which is false both
+     * during the start-up bootstrap and while the Advertised_Route
+     * table is reloaded after an SB reconnect. */
+    bool initial_sync_completed;
 };
 
 static void
@@ -5789,6 +6051,51 @@ en_route_exchange_run(struct engine_node *node, void *data)
         return EN_STALE;
     }
 
+    struct ed_type_route *route_data =
+        engine_get_input_data("route", node);
+    struct controller_engine_ctx *ctrl_ctx =
+        engine_get_context()->client_ctx;
+
+    /* The set of local route-exchange datapaths selects the Advertised_Route
+     * rows that are relevant to this chassis.  Until the initial dump of
+     * exactly those rows is complete, we must not run the destructive kernel
+     * sync: it deletes every OVN route it does not see, so a partial view
+     * would delete routes we installed before a restart that have not
+     * reached our view yet.  With no local route-exchange datapaths there is
+     * no scoped dump to wait for, so once the first armed sync has run the
+     * view is complete and the sync may run to clean up the VRFs and routes
+     * of the removed datapaths. */
+    bool have_local_re_datapaths =
+        !hmap_is_empty(&route_data->announce_routes);
+    bool ready = ctrl_ctx->sb_all_data_loaded
+                 && (have_local_re_datapaths
+                     ? ctrl_ctx->sb_ar_condition_scoped
+                     : re->initial_sync_completed);
+
+    if (re->initial_routes_loaded && !ready) {
+        /* The set of local route-exchange datapaths changed or the SB
+         * connection reset; defer the destructive sync again until the new
+         * scoped dump is complete. */
+        re->initial_routes_loaded = false;
+        VLOG_INFO("Route-exchange datapath set changed; deferring route "
+                  "sync until the Advertised_Route dump completes.");
+        return EN_UNCHANGED;
+    }
+    if (!re->initial_routes_loaded) {
+        if (!ready) {
+            return EN_UNCHANGED;   /* still loading; kernel untouched */
+        }
+        re->initial_routes_loaded = true;
+        /* Past the start-up danger window from now on: the view has been
+         * complete enough to run the destructive sync once, so a later
+         * transition to an empty local route-exchange datapath set (the
+         * last dynamic-routing router removed) may run it to clean up. */
+        re->initial_sync_completed = true;
+        VLOG_INFO("Advertised_Route dump complete for local route-exchange "
+                  "datapaths; enabling route sync.");
+        /* Fall through: run once now to reconcile the kernel. */
+    }
+
     vector_clear(&rt_notify->watches);
 
     struct route_exchange_ctx_in r_ctx_in;
@@ -5810,6 +6117,13 @@ route_exchange_route_table_handler(struct engine_node *node, void *data)
     struct ed_type_route_exchange *re = data;
     struct ed_type_route_table_notify *rt_notify =
         engine_get_input_data("route_table_notify", node);
+
+    /* While the initial dump is still pending the full run has not happened
+     * yet, so no kernel route watches are registered and nothing was lost.
+     * The first armed run reconciles the kernel from scratch. */
+    if (!re->initial_routes_loaded) {
+        return EN_HANDLED_UNCHANGED;
+    }
 
     /* We were not told about every change, so the routes we know of are not
      * necessarily the ones the kernel has. */
@@ -7371,6 +7685,7 @@ inc_proc_ovn_controller_init(
 
     engine_add_input(&en_route, &en_ovs_open_vswitch, NULL);
     engine_add_input(&en_route, &en_sb_chassis, NULL);
+    engine_add_input(&en_route, &en_sb_ha_chassis_group, NULL);
     engine_add_input(&en_route, &en_sb_port_binding,
                      route_sb_port_binding_data_handler);
     engine_add_input(&en_route, &en_runtime_data,
@@ -7394,6 +7709,10 @@ inc_proc_ovn_controller_init(
     engine_add_input(&en_route_exchange, &en_route_exchange_status, NULL);
     engine_add_input(&en_route_exchange, &en_sb_ro,
                      route_exchange_sb_ro_handler);
+    /* Re-evaluate the initial-dump readiness gate whenever the SB monitor
+     * conditions change (including the final ack of the scoped
+     * Advertised_Route dump). */
+    engine_add_input(&en_route_exchange, &en_sb_cond_seqno, NULL);
 
     engine_add_input(&en_addr_sets, &en_sb_address_set,
                      addr_sets_sb_address_set_handler);
@@ -7546,6 +7865,11 @@ inc_proc_ovn_controller_init(
                      runtime_data_sb_port_binding_handler);
     /* Run sb_ro_handler after port_binding_handler in case port get deleted */
     engine_add_input(&en_runtime_data, &en_sb_ro, runtime_data_sb_ro_handler);
+    /* The HA chassis group handler must be executed after the
+     * sb_port_binding_handler as it relies on new port bindings referencing
+     * new HA chassis groups to be processed first. */
+    engine_add_input(&en_runtime_data, &en_sb_ha_chassis_group,
+                     runtime_data_sb_ha_chassis_group_handler);
 
     /* The OVS interface handler for runtime_data changes MUST be executed
      * after the sb_port_binding_handler as port_binding deletes must be
@@ -8171,6 +8495,8 @@ main(int argc, char *argv[])
         .if_mgr = if_status_mgr_create(),
         .ovnsb_expected_cond_seqno = &ovnsb_expected_cond_seqno,
         .sb_monitor_all = &sb_monitor_all,
+        .sb_all_data_loaded = false,
+        .sb_ar_condition_scoped = false,
     };
     struct if_status_mgr *if_mgr = ctrl_engine_ctx.if_mgr;
 
@@ -8240,6 +8566,10 @@ main(int argc, char *argv[])
             if (!new_ovnsb_cond_seqno) {
                 VLOG_INFO("OVNSB IDL reconnected, force recompute.");
                 engine_set_force_recompute();
+                /* The monitor conditions are re-applied on reconnect, so the
+                 * previously scoped Advertised_Route condition no longer
+                 * holds. */
+                ctrl_engine_ctx.sb_ar_condition_scoped = false;
             }
             ovnsb_cond_seqno = new_ovnsb_cond_seqno;
         }
@@ -8253,6 +8583,18 @@ main(int argc, char *argv[])
             && ovnsb_expected_cond_seqno != UINT_MAX && sb_monitor_all) {
             daemon_started_recently_ignore();
         }
+
+        /* Whether the rows selected by the current monitor conditions are all
+         * present in the IDL.  This is recomputed every loop iteration so
+         * that engine nodes can rely on it being up to date for the
+         * conditions that were applied so far.
+         * If we have sb_monitor_all that means we have all data that we would
+         * ever need. */
+        ctrl_engine_ctx.sb_all_data_loaded =
+            sb_monitor_all ||
+            (ovnsb_cond_seqno == ovnsb_expected_cond_seqno
+             && ovnsb_expected_cond_seqno != UINT_MAX
+             && ovnsb_cond_seqno != 0);
 
         struct engine_context eng_ctx = {
             .ovs_idl_txn = ovs_idl_txn,
@@ -8484,16 +8826,19 @@ main(int argc, char *argv[])
                         }
                     }
 
+                    bool patch_ports_synced = true;
+
                     runtime_data = engine_get_data(&en_runtime_data);
                     if (runtime_data) {
                         stopwatch_start(PATCH_RUN_STOPWATCH_NAME, time_msec());
-                        patch_run(ovs_idl_txn,
-                            sbrec_port_binding_by_type,
+                        patch_ports_synced = patch_run(
+                            ovs_idl_txn, sbrec_port_binding_by_type,
                             ovsrec_bridge_table_get(ovs_idl_loop.idl),
                             ovsrec_open_vswitch_table_get(ovs_idl_loop.idl),
-                            ovsrec_port_by_name,
-                            br_int, chassis, &runtime_data->local_datapaths);
+                            ovsrec_port_by_name, br_int, chassis,
+                            &runtime_data->local_datapaths);
                         stopwatch_stop(PATCH_RUN_STOPWATCH_NAME, time_msec());
+
                         if (vif_plug_provider_has_providers() && ovs_idl_txn) {
                             struct vif_plug_ctx_in vif_plug_ctx_in = {
                                 .ovs_idl_txn = ovs_idl_txn,
@@ -8574,6 +8919,15 @@ main(int argc, char *argv[])
                                     &runtime_data->lbinding_data.bindings,
                                     &runtime_data->local_datapaths,
                                     sb_monitor_all);
+                            /* The Advertised_Route condition now covers the
+                             * local datapaths (or everything, in
+                             * monitor-all mode).  If there are no local
+                             * datapaths yet, there is nothing to cover and
+                             * the empty condition is sufficient. */
+                            ctrl_engine_ctx.sb_ar_condition_scoped =
+                                sb_monitor_all ||
+                                !hmap_is_empty(
+                                    &runtime_data->local_datapaths);
                             bool condition_changed = ovnsb_cond_seqno !=
                                                      ovnsb_expected_cond_seqno;
                             if (had_all_data && condition_changed) {
@@ -8611,18 +8965,22 @@ main(int argc, char *argv[])
                                      chassis, mac_cache_data);
                     }
 
-                    /* Snapshot (nb_cfg, sb_ts) atomically from SB_Global
-                     * and pair them through the barrier ack so the
-                     * eventual completion can be attributed to the
-                     * timestamp that corresponded to this exact nb_cfg
-                     * generation -- not whatever SB_Global value has
-                     * moved on to by the time the barrier acks. */
-                    struct nb_cfg_snap snap = get_nb_cfg(
-                        sbrec_sb_global_table_get(ovnsb_idl_loop.idl),
-                        ovnsb_cond_seqno, ovnsb_expected_cond_seqno);
-                    ofctrl_stamped_seqno_update_create(ofctrl_seq_type_nb_cfg,
-                                                      snap.nb_cfg,
-                                                      snap.ts);
+                    /* Wait for patch ports to be installed and synced before
+                     * incrementing nb_cfg so that --wait=hv properly waits
+                     * for patch ports. */
+                    if (patch_ports_synced) {
+                        /* Snapshot (nb_cfg, sb_ts) atomically from SB_Global
+                         * and pair them through the barrier ack so the
+                         * eventual completion can be attributed to the
+                         * timestamp that corresponded to this exact nb_cfg
+                         * generation -- not whatever SB_Global value has
+                         * moved on to by the time the barrier acks. */
+                        struct nb_cfg_snap snap = get_nb_cfg(
+                            sbrec_sb_global_table_get(ovnsb_idl_loop.idl),
+                            ovnsb_cond_seqno, ovnsb_expected_cond_seqno);
+                        ofctrl_stamped_seqno_update_create(
+                            ofctrl_seq_type_nb_cfg, snap.nb_cfg, snap.ts);
+                    }
 
                     struct local_binding_data *binding_data =
                         runtime_data ? &runtime_data->lbinding_data : NULL;
